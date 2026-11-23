@@ -328,6 +328,7 @@ if [ "$MODE" = "2" ] || [ "$MODE" = "3" ]; then
 fi
 
 echo "[4/4] 生成 sing-box v${SB_VERSION} 零弃用配置并启动服务..."
+install -m 600 /dev/null /tmp/sb_result.txt
 MODE="$MODE" SUBMODE="$SUBMODE" LISTEN_PORT="$LISTEN_PORT" REALITY_SNI="$REALITY_SNI" \
 CF_DOMAIN="$CF_DOMAIN" HY2_BRUTAL="$HY2_BRUTAL" SERVER_IP="$SERVER_IP" \
 ENABLE_RELAY="$ENABLE_RELAY" RES_IP="$RES_IP" RES_PORT="$RES_PORT" RES_SS_PASS="$RES_SS_PASS" \
@@ -532,7 +533,9 @@ cfg['route'] = {
 }
 
 open(cfg_path, 'w').write(json.dumps(cfg, indent=2))
+os.chmod(cfg_path, 0o600)
 PYEOF
+chmod 700 /etc/sing-box && chmod 600 /etc/sing-box/config.json
 
 # 家宽白名单持久化
 if [ "$MODE" = "1" ] && [ "$SUBMODE" = "2" ] && [ -n "$RES_WHITELIST_IP" ]; then
