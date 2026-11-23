@@ -11,6 +11,7 @@
 # ==============================================================================
 
 set -euo pipefail
+trap 'rm -rf /tmp/sb_result.txt /tmp/sb-dl' EXIT
 
 SB_VERSION="1.14.4"
 
@@ -334,6 +335,7 @@ CF_DOMAIN="$CF_DOMAIN" HY2_BRUTAL="$HY2_BRUTAL" SERVER_IP="$SERVER_IP" \
 ENABLE_RELAY="$ENABLE_RELAY" RES_IP="$RES_IP" RES_PORT="$RES_PORT" RES_SS_PASS="$RES_SS_PASS" \
 python3 - << 'PYEOF' > /tmp/sb_result.txt
 import json, os, uuid, secrets, subprocess, base64
+os.umask(0o077)
 
 mode = os.environ['MODE']
 submode = os.environ['SUBMODE']
