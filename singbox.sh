@@ -364,25 +364,40 @@ cfg['dns'] = {
     "strategy": "ipv4_only"
 }
 
-inbounds = [i for i in cfg.get('inbounds', []) if i.get('listen_port') != port]
+if mode == '1' and submode == '2':
+    proto_key, inb_tag = 'ss', f"in-ss-{port}"
+elif mode == '1':
+    proto_key, inb_tag = 'vless', f"in-vless-{port}"
+elif mode == '2':
+    proto_key, inb_tag = 'vless', f"in-cf-{port}"
+else:
+    proto_key, inb_tag = 'hy2', f"in-hy2-{port}"
+
+def is_same_socket(existing, target_port, target_proto):
+    if existing.get('listen_port') != target_port:
+        return False
+    etype = existing.get('type', '')
+    # hysteria2 仅占 UDP，vless 仅占 TCP，二者同端口不冲突；shadowsocks 占 TCP+UDP
+    if (etype == 'hysteria2' and target_proto == 'vless') or (etype == 'vless' and target_proto == 'hy2'):
+        return False
+    return True
+
+inbounds = [i for i in cfg.get('inbounds', []) if i.get('tag') != inb_tag and not is_same_socket(i, port, proto_key)]
+relay_tag = f"out-res-{inb_tag}"
+outbounds = [o for o in cfg.get('outbounds', []) if o.get('tag') not in ('direct', relay_tag)]
+outbounds.insert(0, {"type": "direct", "tag": "direct"})
+
 if enable_relay and res_ip and res_port and res_ss_pass:
-    outbounds = [o for o in cfg.get('outbounds', []) if o.get('tag') not in ('direct', 'out-residential')]
-    outbounds.insert(0, {"type": "direct", "tag": "direct"})
     outbounds.append({
         "type": "shadowsocks",
-        "tag": "out-residential",
+        "tag": relay_tag,
         "server": res_ip,
         "server_port": int(res_port),
         "method": "2022-blake3-aes-256-gcm",
         "password": res_ss_pass
     })
-    relay_tag = "out-residential"
 else:
-    outbounds = [o for o in cfg.get('outbounds', []) if o.get('tag') != 'direct']
-    outbounds.insert(0, {"type": "direct", "tag": "direct"})
     relay_tag = None
-
-inb_tag = f"in-{port}"
 
 if mode == '1' and submode == '2':
     ss_pass = base64.b64encode(os.urandom(32)).decode()
@@ -488,12 +503,18 @@ rules = [
 active_inb_tags = {i.get('tag') for i in inbounds if i.get('tag')}
 active_out_tags = {o.get('tag') for o in outbounds if o.get('tag')}
 for r in cfg.get('route', {}).get('rules', []):
-    if r.get('action') == 'route' and isinstance(r.get('inbound'), list) and r.get('outbound') in active_out_tags:
-        kept = [t for t in r['inbound'] if t != inb_tag and t in active_inb_tags]
+    inb_val = r.get('inbound')
+    inb_list = [inb_val] if isinstance(inb_val, str) else (inb_val if isinstance(inb_val, list) else None)
+    if r.get('action') == 'route' and inb_list and r.get('outbound') in active_out_tags:
+        kept = [t for t in inb_list if t != inb_tag and t in active_inb_tags]
         if kept:
             rules.append({"inbound": kept, "action": "route", "outbound": r['outbound']})
 if relay_tag:
     rules.append({"inbound": [inb_tag], "action": "route", "outbound": relay_tag})
+
+# 清理已无任何规则引用的孤儿中转出站
+used_outs = {r.get('outbound') for r in rules if r.get('action') == 'route'} | {'direct'}
+outbounds = [o for o in outbounds if not o.get('tag', '').startswith('out-res') or o.get('tag') in used_outs]
 
 cfg['inbounds'] = inbounds
 cfg['outbounds'] = outbounds
