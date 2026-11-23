@@ -1,0 +1,603 @@
+#!/bin/bash
+# ==============================================================================
+# CatEacc 生产级 sing-box (v1.14.4) 无面板极简一键部署与调优脚本
+# 仓库: https://github.com/CatEacc/vps-singbox-runbook
+# 适用系统: Debian 11/12/13, Ubuntu 20.04/22.04/24.04 (AMD64 / ARM64)
+# 四套方案（与 vps-xray-runbook 完全对齐，单内核常驻仅 ~20MB 内存）:
+#   1) VLESS + REALITY + Vision（回车默认 443，内置一键家宽 SS-2022 落地 / 一键中转）
+#   2) Cloudflare CDN 优选（VLESS + WS + TLS，回车默认 2053）
+#   3) Hysteria 2 + 20000-50000 端口跳跃（默认 UDP 8443，单进程原生直通家宽）
+#   4) 纯系统底层内核调优模式（不装任何代理内核）
+# ==============================================================================
+
+set -euo pipefail
+
+SB_VERSION="1.14.4"
+
+if [ "$(id -u)" != "0" ]; then
+    echo "[错误] 必须以 root 用户运行此脚本！请先执行 sudo -i"
+    exit 1
+fi
+
+SERVER_IP=$(curl -s4m 5 https://api.ipify.org || curl -s4m 5 https://ipv4.icanhazip.com || echo "YOUR_SERVER_IP")
+OS_INFO=$(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-Linux}" || uname -s)
+KERNEL_INFO=$(uname -r | cut -d'-' -f1)
+ARCH_INFO=$(uname -m)
+MEM_SHOW=$(free -m | awk '/Mem:/ {print $2}')
+BBR_STAT=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "unknown")
+MPTCP_STAT=$(sysctl -n net.mptcp.enabled 2>/dev/null || echo "0")
+
+ESC="$(printf '\033')"
+R="${ESC}[0m"
+B="${ESC}[1m"
+SKY="${ESC}[38;5;39m"
+CYAN="${ESC}[38;5;51m"
+GREEN="${ESC}[38;5;46m"
+YELLOW="${ESC}[38;5;220m"
+ORANGE="${ESC}[38;5;208m"
+PINK="${ESC}[38;5;205m"
+WHITE="${ESC}[1;97m"
+DIM="${ESC}[38;5;245m"
+
+print_cateacc_logo() {
+    G1="${ESC}[38;5;46m"
+    G2="${ESC}[38;5;82m"
+    G3="${ESC}[38;5;118m"
+    G4="${ESC}[38;5;226m"
+    G5="${ESC}[38;5;220m"
+    G6="${ESC}[38;5;208m"
+    G7="${ESC}[38;5;199m"
+    awk -v c1="$G1" -v c2="$G2" -v c3="$G3" -v c4="$G4" -v c5="$G5" -v c6="$G6" -v c7="$G7" -v rs="$R" -v bd="$B" '
+    {
+        line = $0
+        while (length(line) < 42) line = line " "
+        printf "  %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n", \
+            bd c1, substr(line, 1, 6), \
+            c2, substr(line, 7, 6), \
+            c3, substr(line, 13, 6), \
+            c4, substr(line, 19, 6), \
+            c5, substr(line, 25, 6), \
+            c6, substr(line, 31, 6), \
+            c7, substr(line, 37, 6), \
+            rs
+    }
+    ' <<'BANNER'
+   ______      __  ______               
+  / ____/___ _/ /_/ ____/___ ___________
+ / /   / __ `/ __/ __/ / __ `/ ___/ ___/
+/ /___/ /_/ / /_/ /___/ /_/ / /__/ /__  
+\____/\__,_/\__/_____/\__,_/\___/\___/  
+BANNER
+}
+
+svc_badge() {
+    if systemctl is-active --quiet "$1" 2>/dev/null; then
+        printf "${GREEN}● 运行中${R}"
+    elif systemctl list-unit-files 2>/dev/null | grep -q "^$1"; then
+        printf "${YELLOW}● 已停止${R}"
+    else
+        printf "${DIM}○ 未安装${R}"
+    fi
+}
+
+MODE="${1:-}"
+if [ -z "$MODE" ]; then
+    clear 2>/dev/null || true
+    printf '\n'
+    print_cateacc_logo
+    printf '\n'
+    printf "  ${CYAN}猫e/acc (CatEacc)${R} ${DIM}· sing-box v${SB_VERSION} 无面板极简一键部署脚本${R}\n"
+    printf "  ${GREEN}──────────────────────────────────────────────────────────${R}\n"
+    printf "  ${SKY}OS:${R}       ${GREEN}${OS_INFO} (${ARCH_INFO})${R}\n"
+    printf "  ${SKY}Kernel:${R}   ${GREEN}${KERNEL_INFO}${R}  ${DIM}|${R}  ${SKY}BBR:${R} ${GREEN}${BBR_STAT}${R}  ${DIM}|${R}  ${SKY}MPTCP:${R} ${GREEN}${MPTCP_STAT}${R}\n"
+    printf "  ${SKY}Memory:${R}   ${GREEN}${MEM_SHOW} MB${R}  ${DIM}|${R}  ${SKY}IP:${R} ${CYAN}${SERVER_IP}${R}\n"
+    printf "  ${SKY}Service:${R}  sing-box $(svc_badge sing-box)  ${DIM}|${R}  ${PINK}v${SB_VERSION} 零弃用语法${R}\n"
+    printf "  ${SKY}GitHub:${R}   ${CYAN}https://github.com/CatEacc/vps-singbox-runbook${R}\n"
+    printf "  ${SKY}Channel:${R}  ${CYAN}https://t.me/CatCryptoMaster${R}\n"
+    printf "  ${GREEN}──────────────────────────────────────────────────────────${R}\n\n"
+    printf "  ${WHITE}请选择部署方案：${R}\n"
+    printf "  ${GREEN}[1]${R} ${WHITE}VLESS + REALITY + Vision${R} ${CYAN}★ 推荐 · 支持一键家宽落地 / 一键中转${R}\n"
+    printf "      ${DIM}全客户端通吃，回车默认 443 可自选端口，内置 3 选 1 SNI 菜单${R}\n"
+    printf "  ${GREEN}[2]${R} ${WHITE}Cloudflare CDN 优选${R} ${YELLOW}· VLESS + WS + TLS${R}\n"
+    printf "      ${DIM}隐藏源站真实 IP、晚高峰兜底，回车默认 2053 可自选回源端口${R}\n"
+    printf "  ${GREEN}[3]${R} ${WHITE}Hysteria 2 + 端口跳跃${R} ${PINK}· UDP 20000-50000 · 单进程原生直通家宽${R}\n"
+    printf "      ${DIM}无需 SOCKS5 桥接省百兆内存，默认 UDP 8443 错开 TCP 443${R}\n"
+    printf "  ${GREEN}[4]${R} ${WHITE}纯系统底层内核调优模式${R} ${ORANGE}· 零代理内核${R}\n"
+    printf "      ${DIM}仅部署 BBR / 按内存分档缓冲 / 1GB Swap / MPTCP 防护 / Fail2ban${R}\n\n"
+    read -rp "$(printf "${YELLOW}  请输入方案编号 [1-4] (回车默认 1): ${R}")" MODE
+    MODE="${MODE:-1}"
+fi
+
+LISTEN_PORT=""
+SUBMODE="1"
+REALITY_SNI="addons.mozilla.org"
+CF_DOMAIN="cf.example.com"
+HY2_BRUTAL="n"
+ENABLE_RELAY="n"
+RES_IP=""
+RES_PORT=""
+RES_SS_PASS=""
+RES_WHITELIST_IP=""
+
+case "$MODE" in
+    1)
+        echo ""
+        echo "  --- 方案 1 子模式选择 ---"
+        echo "  1) VLESS + REALITY + Vision（前置/直连节点，支持一键中转家宽）"
+        echo "  2) 设为【海外住宅家宽落地机】（随机高位端口 SS-2022，供优化机一键中转）"
+        read -rp "  请选择子模式 [1-2] (回车默认 1): " SUBMODE
+        SUBMODE="${SUBMODE:-1}"
+
+        if [ "$SUBMODE" = "2" ]; then
+            DEF_PORT=$((20000 + RANDOM % 30000))
+            read -rp "  请输入家宽落地 SS-2022 监听端口 (回车默认随机高位端口 ${DEF_PORT}): " LISTEN_PORT
+            LISTEN_PORT="${LISTEN_PORT:-$DEF_PORT}"
+            read -rp "  请输入允许连入的前置优化机 IP（留空不设白名单，多个用逗号分隔）: " RES_WHITELIST_IP
+        else
+            read -rp "  请输入 REALITY 监听端口 (回车默认 443，也可手动输入如 8443): " LISTEN_PORT
+            LISTEN_PORT="${LISTEN_PORT:-443}"
+            echo "  请选择 REALITY 回落目标域名 (SNI)："
+            echo "    1) addons.mozilla.org （推荐：纯海外无国内CDN、TLS 1.3 + H2）"
+            echo "    2) dl.google.com      （官方示例：支持握手加密）"
+            echo "    3) 手动输入自定义域名 （生产建议用 RealiTLScanner 扫同机房冷门站）"
+            read -rp "  请输入选项 [1-3] (回车默认 1): " SNI_OPT
+            case "${SNI_OPT:-1}" in
+                1) REALITY_SNI="addons.mozilla.org" ;;
+                2) REALITY_SNI="dl.google.com" ;;
+                3)
+                    read -rp "  -> 请输入自定义目标域名: " SNI_CUSTOM
+                    REALITY_SNI="${SNI_CUSTOM:-addons.mozilla.org}"
+                    ;;
+                *) REALITY_SNI="addons.mozilla.org" ;;
+            esac
+            read -rp "  是否一键中转到后端海外家宽机？[y/N]: " ENABLE_RELAY
+            ENABLE_RELAY="${ENABLE_RELAY:-n}"
+            if [[ "$ENABLE_RELAY" =~ ^[Yy]$ ]]; then
+                read -rp "  -> 后端家宽机 IP: " RES_IP
+                read -rp "  -> 后端家宽机 SS-2022 端口: " RES_PORT
+                read -rp "  -> 后端家宽机 SS-2022 密钥 (Base64): " RES_SS_PASS
+            fi
+        fi
+        ;;
+    2)
+        read -rp "  请输入 Cloudflare 回源端口 (回车默认 2053，支持 443/2053/2083/8443): " LISTEN_PORT
+        LISTEN_PORT="${LISTEN_PORT:-2053}"
+        read -rp "  请输入 Cloudflare CDN 域名 (如 cf.example.com): " CF_IN
+        CF_DOMAIN="${CF_IN:-cf.example.com}"
+        ;;
+    3)
+        read -rp "  请输入 Hysteria 2 本地 UDP 监听端口 (回车默认 8443 错开 TCP 443，也可填 443): " LISTEN_PORT
+        LISTEN_PORT="${LISTEN_PORT:-8443}"
+        read -rp "  是否为廉价高丢包线路开启 Brutal？(CN2/9929 精品线强烈选 n) [y/N]: " HY2_BRUTAL
+        HY2_BRUTAL="${HY2_BRUTAL:-n}"
+        read -rp "  是否一键中转到后端海外家宽机？[y/N]: " ENABLE_RELAY
+        ENABLE_RELAY="${ENABLE_RELAY:-n}"
+        if [[ "$ENABLE_RELAY" =~ ^[Yy]$ ]]; then
+            read -rp "  -> 后端家宽机 IP: " RES_IP
+            read -rp "  -> 后端家宽机 SS-2022 端口: " RES_PORT
+            read -rp "  -> 后端家宽机 SS-2022 密钥 (Base64): " RES_SS_PASS
+        fi
+        ;;
+    4)
+        ;;
+    *)
+        echo "[错误] 无效编号: ${MODE}，仅支持 1 / 2 / 3 / 4"
+        exit 1
+        ;;
+esac
+
+# ------------------------------------------------------------------------------
+# 阶段一：系统底层优化、Swap 气囊、日志收敛、Fail2ban 与高并发内核栈
+# ------------------------------------------------------------------------------
+echo "[1/4] 更新系统组件并安装基础依赖..."
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y && apt-get upgrade -y
+apt-get install -y curl wget tar chrony iptables nftables iptables-persistent fail2ban python3 python3-systemd openssl
+
+echo "[2/4] 配置原子钟对时、1GB Swap、Journald 50M 收敛与高并发内核栈..."
+systemctl enable --now chrony
+chronyc makestep || true
+timedatectl set-timezone Asia/Shanghai 2>/dev/null || true
+
+if [ ! -f /swapfile ]; then
+    fallocate -l 1G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=1024
+    chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile || true
+fi
+grep -q "/swapfile" /etc/fstab || echo "/swapfile none swap sw 0 0" >> /etc/fstab
+
+cat << 'EOF' > /etc/systemd/journald.conf
+[Journal]
+SystemMaxUse=50M
+SystemMaxFileSize=10M
+RuntimeMaxUse=20M
+MaxRetentionSec=7day
+ForwardToSyslog=no
+EOF
+systemctl restart systemd-journald 2>/dev/null || true
+systemctl disable --now apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service 2>/dev/null || true
+
+if [ -f /etc/gai.conf ]; then
+    sed -i '/^precedence ::ffff:0:0\/96\s\+100/d' /etc/gai.conf
+    echo "precedence ::ffff:0:0/96  100" >> /etc/gai.conf
+fi
+
+SSH_PORTS=$(sshd -T 2>/dev/null | awk '$1=="port"{print $2}' | paste -sd, -)
+SSH_PORTS=${SSH_PORTS:-22}
+cat << EOF > /etc/fail2ban/jail.local
+[DEFAULT]
+bantime = 86400
+bantime.increment = true
+bantime.factor = 2
+bantime.maxtime = 2592000
+findtime = 600
+maxretry = 3
+backend = systemd
+
+[sshd]
+enabled = true
+port = $SSH_PORTS
+mode = aggressive
+EOF
+systemctl enable --now fail2ban && systemctl restart fail2ban
+
+mkdir -p /etc/modules-load.d
+printf "tcp_bbr\nnf_conntrack\n" > /etc/modules-load.d/99-proxy.conf
+modprobe tcp_bbr 2>/dev/null || true
+modprobe nf_conntrack 2>/dev/null || true
+
+MEM_MB=$(free -m | awk '/Mem:/ {print $2}')
+if [ "${MEM_MB:-1000}" -le 700 ]; then
+    RMEM_MAX=16777216; TCP_MAX=8388608; DEF_BUF=262144; CONN_MAX=65536
+elif [ "${MEM_MB:-1000}" -lt 1500 ]; then
+    RMEM_MAX=33554432; TCP_MAX=16777216; DEF_BUF=524288; CONN_MAX=65536
+else
+    RMEM_MAX=67108864; TCP_MAX=33554432; DEF_BUF=1048576; CONN_MAX=131072
+fi
+
+cat << EOF > /etc/sysctl.d/99-zzz-proxy-tuning.conf
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+-net.mptcp.enabled = 0
+net.core.somaxconn = 32768
+net.core.netdev_max_backlog = 16384
+net.ipv4.tcp_max_syn_backlog = 16384
+net.ipv4.ip_local_port_range = 10000 65535
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.tcp_fin_timeout = 15
+net.ipv4.tcp_keepalive_time = 300
+net.ipv4.tcp_keepalive_intvl = 30
+net.ipv4.tcp_keepalive_probes = 3
+net.ipv4.tcp_max_tw_buckets = 262144
+net.ipv4.tcp_slow_start_after_idle = 0
+net.ipv4.tcp_mtu_probing = 1
+net.ipv4.tcp_no_metrics_save = 1
+net.ipv4.tcp_ecn = 0
+net.core.rmem_max = $RMEM_MAX
+net.core.wmem_max = $RMEM_MAX
+net.core.rmem_default = $DEF_BUF
+net.core.wmem_default = $DEF_BUF
+net.ipv4.udp_rmem_min = 16384
+net.ipv4.udp_wmem_min = 16384
+net.ipv4.tcp_rmem = 4096 87380 $TCP_MAX
+net.ipv4.tcp_wmem = 4096 65536 $TCP_MAX
+net.ipv4.tcp_fastopen = 3
+net.ipv4.tcp_notsent_lowat = 16384
+net.ipv4.tcp_adv_win_scale = 1
+-net.netfilter.nf_conntrack_max = $CONN_MAX
+-net.netfilter.nf_conntrack_udp_timeout = 30
+-net.netfilter.nf_conntrack_udp_timeout_stream = 60
+net.ipv4.ip_forward = 1
+fs.file-max = 2097152
+vm.swappiness = 10
+EOF
+grep -vE '^\s*#|^\s*$' /etc/sysctl.d/99-zzz-proxy-tuning.conf | sed 's/^-//' | while IFS='=' read -r k v; do
+    sysctl -w "$(echo "$k" | xargs)=$(echo "$v" | xargs)" >/dev/null 2>&1 || true
+done
+
+if [ "$MODE" = "4" ]; then
+    echo "=================================================================="
+    echo "  【方案 4】纯系统底层内核调优完成！BBR=$(sysctl -n net.ipv4.tcp_congestion_control) MPTCP=$(sysctl -n net.mptcp.enabled 2>/dev/null || echo 0)"
+    echo "=================================================================="
+    exit 0
+fi
+
+# ------------------------------------------------------------------------------
+# 阶段二：下载官方 sing-box v1.14.4 并生成零弃用警告的 /etc/sing-box/config.json
+# ------------------------------------------------------------------------------
+echo "[3/4] 下载官方 sing-box v${SB_VERSION}..."
+case "$ARCH_INFO" in
+    x86_64)  SB_ARCH="amd64" ;;
+    aarch64) SB_ARCH="arm64" ;;
+    *)       echo "[错误] 暂不支持架构: ${ARCH_INFO}"; exit 1 ;;
+esac
+
+mkdir -p /etc/sing-box /tmp/sb-dl
+curl -fsSL -o /tmp/sb-dl/sb.tar.gz "https://github.com/SagerNet/sing-box/releases/download/v${SB_VERSION}/sing-box-${SB_VERSION}-linux-${SB_ARCH}.tar.gz"
+tar -xzf /tmp/sb-dl/sb.tar.gz -C /tmp/sb-dl
+install -m 755 "/tmp/sb-dl/sing-box-${SB_VERSION}-linux-${SB_ARCH}/sing-box" /usr/local/bin/sing-box
+rm -rf /tmp/sb-dl
+
+# 若为方案 2 (CF TLS) 或方案 3 (Hy2)，生成 10 年自签 EC 证书
+if [ "$MODE" = "2" ] || [ "$MODE" = "3" ]; then
+    if [ ! -f /etc/sing-box/server.crt ] || [ ! -f /etc/sing-box/server.key ]; then
+        openssl ecparam -genkey -name prime256v1 -out /etc/sing-box/server.key
+        openssl req -new -x509 -days 3650 -key /etc/sing-box/server.key -out /etc/sing-box/server.crt \
+          -subj "/CN=www.bing.com" -addext "subjectAltName=DNS:www.bing.com" 2>/dev/null
+    fi
+    chmod 644 /etc/sing-box/server.crt && chmod 600 /etc/sing-box/server.key
+fi
+
+echo "[4/4] 生成 sing-box v${SB_VERSION} 零弃用配置并启动服务..."
+MODE="$MODE" SUBMODE="$SUBMODE" LISTEN_PORT="$LISTEN_PORT" REALITY_SNI="$REALITY_SNI" \
+CF_DOMAIN="$CF_DOMAIN" HY2_BRUTAL="$HY2_BRUTAL" SERVER_IP="$SERVER_IP" \
+ENABLE_RELAY="$ENABLE_RELAY" RES_IP="$RES_IP" RES_PORT="$RES_PORT" RES_SS_PASS="$RES_SS_PASS" \
+python3 - << 'PYEOF' > /tmp/sb_result.txt
+import json, os, uuid, secrets, subprocess, base64
+
+mode = os.environ['MODE']
+submode = os.environ['SUBMODE']
+port = int(os.environ['LISTEN_PORT'])
+sni = os.environ['REALITY_SNI']
+cf_domain = os.environ['CF_DOMAIN']
+hy2_brutal = os.environ['HY2_BRUTAL'].lower() == 'y'
+server_ip = os.environ['SERVER_IP']
+enable_relay = os.environ['ENABLE_RELAY'].lower() == 'y'
+res_ip = os.environ['RES_IP'].strip()
+res_port = os.environ['RES_PORT'].strip()
+res_ss_pass = os.environ['RES_SS_PASS'].strip()
+
+cfg_path = '/etc/sing-box/config.json'
+if os.path.exists(cfg_path):
+    try:
+        cfg = json.load(open(cfg_path))
+    except Exception:
+        cfg = {}
+else:
+    cfg = {}
+
+cfg['log'] = {"level": "warn", "timestamp": True}
+cfg['http_clients'] = [{"tag": "direct-http", "detour": "direct"}]
+cfg['dns'] = {
+    "servers": [
+        {"type": "https", "tag": "dns-remote", "server": "1.1.1.1"}
+    ],
+    "strategy": "ipv4_only"
+}
+
+inbounds = [i for i in cfg.get('inbounds', []) if i.get('listen_port') != port]
+if enable_relay and res_ip and res_port and res_ss_pass:
+    outbounds = [o for o in cfg.get('outbounds', []) if o.get('tag') not in ('direct', 'out-residential')]
+    outbounds.insert(0, {"type": "direct", "tag": "direct"})
+    outbounds.append({
+        "type": "shadowsocks",
+        "tag": "out-residential",
+        "server": res_ip,
+        "server_port": int(res_port),
+        "method": "2022-blake3-aes-256-gcm",
+        "password": res_ss_pass
+    })
+    relay_tag = "out-residential"
+else:
+    outbounds = [o for o in cfg.get('outbounds', []) if o.get('tag') != 'direct']
+    outbounds.insert(0, {"type": "direct", "tag": "direct"})
+    relay_tag = None
+
+inb_tag = f"in-{port}"
+
+if mode == '1' and submode == '2':
+    ss_pass = base64.b64encode(os.urandom(32)).decode()
+    inbounds.append({
+        "type": "shadowsocks",
+        "tag": inb_tag,
+        "listen": "::",
+        "listen_port": port,
+        "method": "2022-blake3-aes-256-gcm",
+        "password": ss_pass
+    })
+    print("RESULT_TYPE=RESIDENTIAL_SS")
+    print(f"SS_IP={server_ip}")
+    print(f"SS_PORT={port}")
+    print(f"SS_PASS={ss_pass}")
+
+elif mode == '1':
+    kp = subprocess.check_output(['/usr/local/bin/sing-box', 'generate', 'reality-keypair'], text=True)
+    priv = pub = ''
+    for line in kp.splitlines():
+        if 'PrivateKey' in line: priv = line.split(':', 1)[1].strip()
+        elif 'PublicKey' in line: pub = line.split(':', 1)[1].strip()
+    sid = secrets.token_hex(4)
+    u = str(uuid.uuid4())
+    inbounds.append({
+        "type": "vless",
+        "tag": inb_tag,
+        "listen": "::",
+        "listen_port": port,
+        "users": [{"uuid": u, "flow": "xtls-rprx-vision"}],
+        "tls": {
+            "enabled": True,
+            "server_name": sni,
+            "reality": {
+                "enabled": True,
+                "handshake": {"server": sni, "server_port": 443},
+                "private_key": priv,
+                "short_id": [sid]
+            }
+        }
+    })
+    print("RESULT_TYPE=LINK")
+    print(f"SHARE_LINK=vless://{u}@{server_ip}:{port}?type=tcp&security=reality&pbk={pub}&fp=chrome&sni={sni}&sid={sid}&flow=xtls-rprx-vision#CatEacc-SB-REALITY")
+
+elif mode == '2':
+    u = str(uuid.uuid4())
+    inbounds.append({
+        "type": "vless",
+        "tag": inb_tag,
+        "listen": "::",
+        "listen_port": port,
+        "users": [{"uuid": u}],
+        "tls": {
+            "enabled": True,
+            "server_name": cf_domain,
+            "certificate_path": "/etc/sing-box/server.crt",
+            "key_path": "/etc/sing-box/server.key"
+        },
+        "transport": {
+            "type": "ws",
+            "path": "/vless-ws",
+            "headers": {"Host": cf_domain}
+        }
+    })
+    print("RESULT_TYPE=LINK")
+    print(f"SHARE_LINK=vless://{u}@{cf_domain}:{port}?type=ws&security=tls&path=%2Fvless-ws&host={cf_domain}&sni={cf_domain}#CatEacc-SB-CF-WS")
+
+elif mode == '3':
+    hy2_pass = ''.join(secrets.choice('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(16))
+    fp = subprocess.check_output(['openssl', 'x509', '-in', '/etc/sing-box/server.crt', '-noout', '-sha256', '-fingerprint'], text=True).split('=', 1)[1].strip()
+    spki = subprocess.check_output(
+        "openssl x509 -in /etc/sing-box/server.crt -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl enc -base64",
+        shell=True, text=True
+    ).strip()
+    hy2_inb = {
+        "type": "hysteria2",
+        "tag": inb_tag,
+        "listen": "::",
+        "listen_port": port,
+        "users": [{"password": hy2_pass}],
+        "ignore_client_bandwidth": (not hy2_brutal),
+        "tls": {
+            "enabled": True,
+            "certificate_path": "/etc/sing-box/server.crt",
+            "key_path": "/etc/sing-box/server.key"
+        },
+        "masquerade": "https://www.bing.com/"
+    }
+    if hy2_brutal:
+        hy2_inb["up_mbps"] = 500
+        hy2_inb["down_mbps"] = 100
+    inbounds.append(hy2_inb)
+    print("RESULT_TYPE=LINK")
+    print(f"SHARE_LINK=hysteria2://{hy2_pass}@{server_ip}:{port}?insecure=1&sni=www.bing.com&pinSHA256={fp}&mport=20000-50000#CatEacc-SB-Hy2")
+    print(f"SPKI_SHA256={spki}")
+
+rules = [
+    {"action": "sniff"},
+    {"protocol": "bittorrent", "action": "reject"},
+    {"ip_is_private": True, "action": "reject"},
+    {"rule_set": "geoip-cn", "action": "reject"}
+]
+active_inb_tags = {i.get('tag') for i in inbounds if i.get('tag')}
+active_out_tags = {o.get('tag') for o in outbounds if o.get('tag')}
+for r in cfg.get('route', {}).get('rules', []):
+    if r.get('action') == 'route' and isinstance(r.get('inbound'), list) and r.get('outbound') in active_out_tags:
+        kept = [t for t in r['inbound'] if t != inb_tag and t in active_inb_tags]
+        if kept:
+            rules.append({"inbound": kept, "action": "route", "outbound": r['outbound']})
+if relay_tag:
+    rules.append({"inbound": [inb_tag], "action": "route", "outbound": relay_tag})
+
+cfg['inbounds'] = inbounds
+cfg['outbounds'] = outbounds
+cfg['route'] = {
+    "rules": rules,
+    "rule_set": [{
+        "type": "remote",
+        "tag": "geoip-cn",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs",
+        "http_client": "direct-http"
+    }],
+    "final": "direct",
+    "default_domain_resolver": "dns-remote"
+}
+
+open(cfg_path, 'w').write(json.dumps(cfg, indent=2))
+PYEOF
+
+# 家宽白名单持久化
+if [ "$MODE" = "1" ] && [ "$SUBMODE" = "2" ] && [ -n "$RES_WHITELIST_IP" ]; then
+    mkdir -p /etc/nftables.d
+    cat << EOF > /etc/nftables.d/sb-res-guard.nft
+table inet sb_res_guard
+delete table inet sb_res_guard
+table inet sb_res_guard {
+    set trusted_relays_v4 {
+        type ipv4_addr
+        flags interval
+        elements = { 127.0.0.0/8, ${RES_WHITELIST_IP} }
+    }
+    chain input {
+        type filter hook input priority filter; policy accept;
+        iifname "lo" accept
+        ct state established,related accept
+        tcp dport ${LISTEN_PORT} ip saddr @trusted_relays_v4 accept
+        udp dport ${LISTEN_PORT} ip saddr @trusted_relays_v4 accept
+        tcp dport ${LISTEN_PORT} drop
+        udp dport ${LISTEN_PORT} drop
+    }
+}
+EOF
+    nft -f /etc/nftables.d/sb-res-guard.nft || true
+fi
+
+# 方案 3 端口跳跃
+if [ "$MODE" = "3" ]; then
+    cat << EOF > /etc/systemd/system/sb-hy2-hopping.service
+[Unit]
+Description=sing-box Hysteria 2 Port Hopping (IPv4/IPv6 Idempotent)
+After=network.target
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'iptables -t nat -C PREROUTING -p udp -m addrtype --dst-type LOCAL --dport 20000:50000 -j REDIRECT --to-ports ${LISTEN_PORT} 2>/dev/null || iptables -t nat -A PREROUTING -p udp -m addrtype --dst-type LOCAL --dport 20000:50000 -j REDIRECT --to-ports ${LISTEN_PORT}; ip6tables -t nat -C PREROUTING -p udp -m addrtype --dst-type LOCAL --dport 20000:50000 -j REDIRECT --to-ports ${LISTEN_PORT} 2>/dev/null || ip6tables -t nat -A PREROUTING -p udp -m addrtype --dst-type LOCAL --dport 20000:50000 -j REDIRECT --to-ports ${LISTEN_PORT} 2>/dev/null || true'
+ExecStop=/bin/sh -c 'iptables -t nat -D PREROUTING -p udp -m addrtype --dst-type LOCAL --dport 20000:50000 -j REDIRECT --to-ports ${LISTEN_PORT} 2>/dev/null || true; ip6tables -t nat -D PREROUTING -p udp -m addrtype --dst-type LOCAL --dport 20000:50000 -j REDIRECT --to-ports ${LISTEN_PORT} 2>/dev/null || true'
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload && systemctl enable --now sb-hy2-hopping.service
+fi
+
+# 严格校验配置并启动 systemd 守护
+/usr/local/bin/sing-box check -c /etc/sing-box/config.json
+cat << 'EOF' > /etc/systemd/system/sing-box.service
+[Unit]
+Description=sing-box service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
+Restart=always
+RestartSec=3s
+LimitNOFILE=1048576
+OOMScoreAdjust=-500
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload && systemctl enable --now sing-box && systemctl restart sing-box
+
+echo ""
+printf "  ${GREEN}──────────────────────────────────────────────────────────${R}\n"
+printf "  ${WHITE}部署完成！服务状态验收：${R}\n"
+printf "  - sing-box : $(svc_badge sing-box)  (${PINK}v${SB_VERSION}${R})\n"
+printf "  - 配置文件 : ${CYAN}/etc/sing-box/config.json${R}\n"
+if [ -f /tmp/sb_result.txt ]; then
+    if grep -q "RESULT_TYPE=RESIDENTIAL_SS" /tmp/sb_result.txt; then
+        printf "  ${YELLOW}【家宽落地 SS-2022 中转凭据】（请复制到前置优化机脚本中）：${R}\n"
+        grep -E "^SS_(IP|PORT|PASS)=" /tmp/sb_result.txt | sed 's/^/  /'
+    elif grep -q "RESULT_TYPE=LINK" /tmp/sb_result.txt; then
+        printf "  ${YELLOW}【客户端导入链接】：${R}\n"
+        grep "^SHARE_LINK=" /tmp/sb_result.txt | cut -d'=' -f2- | sed 's/^/  /'
+        if grep -q "^SPKI_SHA256=" /tmp/sb_result.txt; then
+            printf "  ${YELLOW}【sing-box client.json 证书锁定 (certificate_public_key_sha256)】：${R}\n"
+            grep "^SPKI_SHA256=" /tmp/sb_result.txt | cut -d'=' -f2- | sed 's/^/  /'
+        fi
+    fi
+    rm -f /tmp/sb_result.txt
+fi
+printf "  ${GREEN}──────────────────────────────────────────────────────────${R}\n"
+printf "  ${CYAN}本脚本由 猫e/acc (CatEacc) 维护提供${R}\n"
+printf "  ${SKY}GitHub:${R}  ${CYAN}https://github.com/CatEacc/vps-singbox-runbook${R}\n"
+printf "  ${SKY}Channel:${R} ${CYAN}https://t.me/CatCryptoMaster${R}\n"
+printf "  ${GREEN}──────────────────────────────────────────────────────────${R}\n"
