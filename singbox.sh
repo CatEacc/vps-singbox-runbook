@@ -104,8 +104,9 @@ if [ -z "$MODE" ]; then
     printf "  ${GREEN}[3]${R} ${WHITE}Hysteria 2 + 端口跳跃${R} ${PINK}· UDP 20000-50000 · 单进程原生直通家宽${R}\n"
     printf "      ${DIM}无需 SOCKS5 桥接省百兆内存，默认 UDP 8443 错开 TCP 443${R}\n"
     printf "  ${GREEN}[4]${R} ${WHITE}纯系统底层内核调优模式${R} ${ORANGE}· 零代理内核${R}\n"
-    printf "      ${DIM}仅部署 BBR / 按内存分档缓冲 / 1GB Swap / MPTCP 防护 / Fail2ban${R}\n\n"
-    read -rp "$(printf "${YELLOW}  请输入方案编号 [1-4] (回车默认 1): ${R}")" MODE
+    printf "      ${DIM}仅部署 BBR / 按内存分档缓冲 / 1GB Swap / MPTCP 防护 / Fail2ban${R}\n"
+    printf "  ${GREEN}[5]${R} ${WHITE}一键导出所有节点链接 & Hy2 公钥指纹${R} ${CYAN}· 只读${R}\n\n"
+    read -rp "$(printf "${YELLOW}  请输入方案编号 [1-5] (回车默认 1): ${R}")" MODE
     MODE="${MODE:-1}"
 fi
 
@@ -146,15 +147,15 @@ case "$MODE" in
             case "${SNI_OPT:-1}" in
                 1)
                     if command -v python3 >/dev/null 2>&1; then
-                        echo "  -> 正在从本机并发实测 16 个纯海外 TLS 1.3 + H2 目标站..."
+                        echo "  -> 正在从本机并发实测 14 个纯海外非 CF 的 TLS 1.3 + H2 目标站..."
                         SNI_LIST=$(python3 - << 'SNIPY'
 import ssl, socket, time
 from concurrent.futures import ThreadPoolExecutor
 CANDIDATES = [
-    "addons.mozilla.org", "dl.google.com", "www.cloudflare.com", "pkg.cloudflare.com",
-    "www.debian.org", "www.hetzner.com", "www.digitalocean.com", "www.linode.com",
-    "www.vultr.com", "www.amd.com", "www.nvidia.com", "www.oracle.com",
-    "www.redhat.com", "www.sony.jp", "www.nintendo.co.jp", "www.lovelive-anime.jp"
+    "addons.mozilla.org", "dl.google.com", "www.debian.org", "www.hetzner.com",
+    "www.digitalocean.com", "www.linode.com", "www.vultr.com", "www.amd.com",
+    "www.nvidia.com", "www.oracle.com", "www.redhat.com", "www.sony.jp",
+    "www.nintendo.co.jp", "www.lovelive-anime.jp"
 ]
 def probe(host):
     ctx = ssl.create_default_context()
@@ -264,8 +265,79 @@ CHKPY
         ;;
     4)
         ;;
+    5|links)
+        echo ""
+        SERVER_IP="$SERVER_IP" python3 - << 'SBEXPPY'
+import json, os, base64, subprocess, urllib.parse
+
+server_ip = os.environ.get('SERVER_IP', 'YOUR_SERVER_IP')
+cfg_path = '/etc/sing-box/config.json'
+
+def x25519_pub(priv_b64):
+    pad = '=' * (-len(priv_b64) % 4)
+    raw = base64.urlsafe_b64decode(priv_b64 + pad)
+    der = bytes.fromhex('302e020100300506032b656e04220420') + raw
+    pub_der = subprocess.check_output(['openssl', 'pkey', '-inform', 'DER', '-pubout', '-outform', 'DER'], input=der)
+    return base64.urlsafe_b64encode(pub_der[-32:]).decode().rstrip('=')
+
+print("==================================================================")
+print("  【sing-box 节点分享链接一键导出】")
+print("==================================================================")
+if not os.path.exists(cfg_path):
+    print("  (未检测到 /etc/sing-box/config.json)")
+else:
+    cfg = json.load(open(cfg_path))
+    found = 0
+    for inb in cfg.get('inbounds', []):
+        t = inb.get('type')
+        port = inb.get('listen_port')
+        tag = inb.get('tag', f'{t}-{port}')
+        if t == 'vless':
+            u = (inb.get('users') or [{}])[0].get('uuid', '')
+            tls = inb.get('tls', {})
+            if tls.get('reality', {}).get('enabled'):
+                sni = tls.get('server_name', 'addons.mozilla.org')
+                sid = (tls['reality'].get('short_id') or [''])[0]
+                try:
+                    pbk = x25519_pub(tls['reality']['private_key'])
+                except Exception:
+                    pbk = 'DERIVE_FAILED'
+                print(f"  [{tag}] vless://{u}@{server_ip}:{port}?type=tcp&security=reality&pbk={pbk}&fp=chrome&sni={sni}&sid={sid}&flow=xtls-rprx-vision#{urllib.parse.quote(tag)}")
+                found += 1
+            elif tls.get('enabled'):
+                host = tls.get('server_name', server_ip)
+                path = urllib.parse.quote(inb.get('transport', {}).get('path', '/vless-ws'), safe='')
+                print(f"  [{tag}] vless://{u}@{host}:{port}?type=ws&security=tls&path={path}&host={host}&sni={host}#{urllib.parse.quote(tag)}")
+                found += 1
+        elif t == 'hysteria2':
+            pwd = (inb.get('users') or [{}])[0].get('password', '')
+            cert = inb.get('tls', {}).get('certificate_path', '/etc/sing-box/server.crt')
+            fp = spki = ''
+            if os.path.exists(cert):
+                try:
+                    fp = subprocess.check_output(['openssl', 'x509', '-in', cert, '-noout', '-sha256', '-fingerprint'], text=True).split('=', 1)[1].strip()
+                    spki = subprocess.check_output(f"openssl x509 -in {cert} -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl enc -base64", shell=True, text=True).strip()
+                except Exception:
+                    pass
+            print(f"  [{tag}] hysteria2://{pwd}@{server_ip}:{port}?insecure=1&sni=www.bing.com&pinSHA256={fp}&mport=20000-50000#{urllib.parse.quote(tag)}")
+            if spki:
+                print(f"    (client.json certificate_public_key_sha256: {spki})")
+            found += 1
+        elif t == 'shadowsocks':
+            method = inb.get('method', '')
+            pwd = inb.get('password', '')
+            cred = base64.urlsafe_b64encode(f"{method}:{pwd}".encode()).decode().rstrip('=')
+            print(f"  [{tag}] ss://{cred}@{server_ip}:{port}#{urllib.parse.quote(tag)}")
+            print(f"    (家宽中转参数: IP={server_ip} | PORT={port} | PASS={pwd})")
+            found += 1
+    if not found:
+        print("  (当前未检测到入站节点)")
+print("==================================================================")
+SBEXPPY
+        exit 0
+        ;;
     *)
-        echo "[错误] 无效编号: ${MODE}，仅支持 1 / 2 / 3 / 4"
+        echo "[错误] 无效编号: ${MODE}，仅支持 1 / 2 / 3 / 4 / 5"
         exit 1
         ;;
 esac
