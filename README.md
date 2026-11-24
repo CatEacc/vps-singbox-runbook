@@ -20,7 +20,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/CatEacc/vps-singbox-runbook/
 
 ![CatEacc vps-singbox-runbook 终端菜单](https://raw.githubusercontent.com/CatEacc/vps-singbox-runbook/main/singbox_menu.png)
 
-* **方案 1：`VLESS + REALITY + Vision`**（回车默认 `443` 可自选端口，全套 256 色交互 + 内置 **9 大地区 100% 纯本土 X25519 SNI 自动测速 + 全球 5 站兜底池 + 选后自动实时四重复检**，防套 CF / 防国内 CDN / 防被墙；**支持直接粘贴 `ss://` 链接自动解析，或填后端家宽机 SSH 账密全自动远程部署落地并加白名单完成中转对接**）
+* **方案 1：`VLESS + REALITY + Vision`**（回车默认 `443` 可自选端口，内置 **9 大地区 100% 纯本土 X25519 SNI 自动测速 + 全球 5 站兜底池 + 选后自动实时四重复检**，防套 CF / 防国内 CDN / 防被墙；**支持直接粘贴 `ss://` 链接自动解析，或填后端家宽机 SSH 账密全自动远程部署落地并加白名单完成中转对接**）
 * **方案 2：`Cloudflare CDN 优选`**（`VLESS + WS + TLS`，默认 `2053` 可自选回源端口）
 * **方案 3：`Hysteria 2 + 20000-50000 端口跳跃`**（默认 `UDP 8443` 错开 `TCP 443`，**单进程原生直通后端家宽，无需本地 SOCKS5 桥接、省百兆内存**）
 * **方案 4：`纯系统底层内核调优模式`**（BBR + FQ、按内存分档网络缓冲区、1GB Swap、禁 MPTCP、Fail2ban、Journald 50M 收敛）
