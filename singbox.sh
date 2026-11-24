@@ -277,7 +277,14 @@ CHKPY
     5|links)
         echo ""
         SERVER_IP="$SERVER_IP" python3 - << 'SBEXPPY'
-import json, os, base64, subprocess, urllib.parse
+import json, os, base64, subprocess, urllib.parse, shutil
+
+def print_qr(url):
+    if shutil.which('qrencode') and url:
+        try:
+            subprocess.run(['qrencode', '-t', 'ANSIUTF8', '-m', '1', url], check=False)
+        except Exception:
+            pass
 
 server_ip = os.environ.get('SERVER_IP', 'YOUR_SERVER_IP')
 cfg_path = '/etc/sing-box/config.json'
@@ -311,12 +318,16 @@ else:
                     pbk = x25519_pub(tls['reality']['private_key'])
                 except Exception:
                     pbk = 'DERIVE_FAILED'
-                print(f"  [{tag}] vless://{u}@{server_ip}:{port}?type=tcp&security=reality&pbk={pbk}&fp=chrome&sni={sni}&sid={sid}&flow=xtls-rprx-vision#{urllib.parse.quote(tag)}")
+                link = f"vless://{u}@{server_ip}:{port}?type=tcp&security=reality&pbk={pbk}&fp=chrome&sni={sni}&sid={sid}&flow=xtls-rprx-vision#{urllib.parse.quote(tag)}"
+                print(f"  [{tag}] {link}")
+                print_qr(link)
                 found += 1
             elif tls.get('enabled'):
                 host = tls.get('server_name', server_ip)
                 path = urllib.parse.quote(inb.get('transport', {}).get('path', '/vless-ws'), safe='')
-                print(f"  [{tag}] vless://{u}@{host}:{port}?type=ws&security=tls&path={path}&host={host}&sni={host}#{urllib.parse.quote(tag)}")
+                link = f"vless://{u}@{host}:{port}?type=ws&security=tls&path={path}&host={host}&sni={host}#{urllib.parse.quote(tag)}"
+                print(f"  [{tag}] {link}")
+                print_qr(link)
                 found += 1
         elif t == 'hysteria2':
             pwd = (inb.get('users') or [{}])[0].get('password', '')
@@ -328,7 +339,9 @@ else:
                     spki = subprocess.check_output(f"openssl x509 -in {cert} -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl enc -base64", shell=True, text=True).strip()
                 except Exception:
                     pass
-            print(f"  [{tag}] hysteria2://{pwd}@{server_ip}:{port}?insecure=1&sni=www.bing.com&pinSHA256={fp}&mport=20000-50000#{urllib.parse.quote(tag)}")
+            hy_url = f"hysteria2://{pwd}@{server_ip}:{port}?insecure=1&sni=www.bing.com&pinSHA256={fp}&mport=20000-50000#{urllib.parse.quote(tag)}"
+            print(f"  [{tag}] {hy_url}")
+            print_qr(hy_url)
             if spki:
                 print(f"    (client.json certificate_public_key_sha256: {spki})")
             found += 1
@@ -357,7 +370,8 @@ esac
 echo "[1/4] 更新系统组件并安装基础依赖..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y && apt-get upgrade -y
-apt-get install -y curl wget tar chrony iptables nftables iptables-persistent fail2ban python3 python3-systemd openssl
+apt-get install -y curl wget tar chrony iptables nftables iptables-persistent fail2ban python3 python3-systemd openssl qrencode || \
+  apt-get install -y curl wget tar chrony iptables nftables iptables-persistent fail2ban python3 python3-systemd openssl
 
 echo "[2/4] 配置原子钟对时、1GB Swap、Journald 50M 收敛与高并发内核栈..."
 systemctl enable --now chrony
@@ -778,7 +792,12 @@ if [ -f /tmp/sb_result.txt ]; then
         grep -E "^SS_(IP|PORT|PASS)=" /tmp/sb_result.txt | sed 's/^/  /'
     elif grep -q "RESULT_TYPE=LINK" /tmp/sb_result.txt; then
         printf "  ${YELLOW}【客户端导入链接】：${R}\n"
-        grep "^SHARE_LINK=" /tmp/sb_result.txt | cut -d'=' -f2- | sed 's/^/  /'
+        SB_URL=$(grep "^SHARE_LINK=" /tmp/sb_result.txt | cut -d'=' -f2-)
+        echo "  ${SB_URL}"
+        if command -v qrencode >/dev/null 2>&1 && [ -n "$SB_URL" ]; then
+            printf "  ${YELLOW}【手机扫码导入（Shadowrocket / v2rayNG / Stash）】：${R}\n"
+            qrencode -t ANSIUTF8 -m 1 "$SB_URL" || true
+        fi
         if grep -q "^SPKI_SHA256=" /tmp/sb_result.txt; then
             printf "  ${YELLOW}【sing-box client.json 证书锁定 (certificate_public_key_sha256)】：${R}\n"
             grep "^SPKI_SHA256=" /tmp/sb_result.txt | cut -d'=' -f2- | sed 's/^/  /'
