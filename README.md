@@ -51,7 +51,31 @@ bash <(curl -fsSL https://raw.githubusercontent.com/CatEacc/vps-singbox-runbook/
 
 ---
 
-## 三、常用运维命令
+## 三、方案 2：Cloudflare CDN 优选小白配置教学（`VLESS + WS + TLS`）
+
+若你选择了脚本中的 **方案 2（Cloudflare CDN 优选，默认 `2053` 端口）**，跑完脚本后按下面 5 步在 Cloudflare 后台点完即可连通：
+
+1. **添加 DNS 解析并开启小黄云（Proxied）**：
+   * 进入 Cloudflare 后台 → **DNS → Records → Add record**：
+   * Type 选 **`A`**，Name 填子域（如 `cf`，对应 `cf.example.com`），IPv4 address 填你的 **VPS 真实 IP**，**Proxy status 必须打开橙色云朵（Proxied）**。
+2. **设置 SSL/TLS 加密模式（最容易踩坑）**：
+   * 进入 **SSL/TLS → Overview**，将加密模式设为 **`Full`（完全）**。
+   * ⚠️ 脚本默认签发自签证书，**切勿选 `Flexible`**（会连不上），也**不要选 `Full (Strict)`**（会报 `526`），除非你自行替换了 `acme.sh` 或 Cloudflare Origin 正规证书。
+3. **打开 WebSockets 与检查端口**：
+   * 进入 **Network（网络）**，确认 **WebSockets** 为开启状态（本方案采用 `VLESS + WS + TLS`）。
+   * Cloudflare 免费版支持代理的 HTTPS 端口：`443`、`2053`（默认）、`2083`、`2087`、`2096`、`8443`；请确认云厂商安全组已放行对应 TCP 端口。
+4. **客户端导入与替换优选 IP / 优选域名**：
+   * 直接导入脚本输出的 `vless://` 链接即可使用默认 CF 线路；
+   * 如需优选提速：**仅把节点里的「地址 (Address / server)」改成优选 IP 或优选域名**，**`Host` 和 `SNI` 必须保持为你的 CF 域名不变**。
+5. **常见报错速查**：
+   * **`521`**：云厂商安全组未放行 TCP `2053`（或自选端口），或 `sing-box` 未运行；
+   * **`522`**：DNS `A` 记录 IP 填错或源站端口不匹配；
+   * **`525` / `526`**：Cloudflare SSL/TLS 模式选错，改为 **`Full`** 即可；
+   * **导入后连不上**：检查是否误把 `Host` / `SNI` 改成了优选 IP（必须保持为你的域名）。
+
+---
+
+## 四、常用运维命令
 
 ```bash
 # 校验配置语法（零报错无输出即通过）

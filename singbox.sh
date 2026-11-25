@@ -1034,6 +1034,14 @@ if [ -f /tmp/sb_result.txt ]; then
     fi
     rm -f /tmp/sb_result.txt
 fi
+if [ "$MODE" = "2" ]; then
+    printf "  ${GREEN}──────────────────────────────────────────────────────────${R}\n"
+    printf "  ${YELLOW}【Cloudflare 后台 4 步检查清单（小白照着点）】：${R}\n"
+    printf "  1. DNS 添加 A 记录: ${WHITE}${CF_DOMAIN}${R} -> ${WHITE}${SERVER_IP}${R}（务必开启小黄云 Proxied）\n"
+    printf "  2. SSL/TLS 设为: ${WHITE}Full${R}（自签证书勿选 Flexible 或 Full Strict，防 525/526）\n"
+    printf "  3. Network 开启 ${WHITE}WebSockets${R}，云安全组放行 ${WHITE}TCP ${LISTEN_PORT}${R}\n"
+    printf "  4. 客户端优选提速: 仅改「地址」为优选 IP/域名，Host/SNI 保持 ${WHITE}${CF_DOMAIN}${R} 不变\n"
+fi
 printf "  ${GREEN}──────────────────────────────────────────────────────────${R}\n"
 printf "  ${CYAN}本脚本由 猫e/acc (CatEacc) 维护提供${R}\n"
 printf "  ${SKY}GitHub:${R}  ${CYAN}https://github.com/CatEacc/vps-singbox-runbook${R}\n"
