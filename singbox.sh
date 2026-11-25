@@ -907,6 +907,7 @@ elif mode == '3':
 rules = [
     {"action": "sniff"},
     {"protocol": "bittorrent", "action": "reject"},
+    {"port": [25], "action": "reject"},
     {"ip_is_private": True, "action": "reject"},
     {"rule_set": "geoip-cn", "action": "reject"}
 ]
@@ -966,6 +967,10 @@ table inet sb_res_guard {
         udp dport ${LISTEN_PORT} ip saddr @trusted_relays_v4 accept
         tcp dport ${LISTEN_PORT} drop
         udp dport ${LISTEN_PORT} drop
+    }
+    chain output {
+        type filter hook output priority filter; policy accept;
+        tcp dport 25 reject with tcp reset
     }
 }
 EOF
