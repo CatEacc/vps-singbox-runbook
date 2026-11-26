@@ -363,7 +363,7 @@ REGIONAL = {
     "SG": ("新加坡", [
         ("www.grab.com",          "Grab 东南亚出行"),
         ("www.changiairport.com", "新加坡樟宜机场"),
-        ("nus.edu.sg",            "新加坡国立大学"),
+        ("www.nus.edu.sg",        "新加坡国立大学"),
         ("www.smu.edu.sg",        "新加坡管理大学"),
         ("www.sutd.edu.sg",       "新加坡科技设计大学"),
     ]),
@@ -1051,8 +1051,8 @@ rules = [
     {"protocol": "bittorrent", "action": "reject"},
     {"port": [25], "action": "reject"},
     {"ip_is_private": True, "action": "reject"},
-    {"rule_set": "geoip-cn", "action": "reject"}
 ]
+relay_rules = []
 active_inb_tags = {i.get('tag') for i in inbounds if i.get('tag')}
 active_out_tags = {o.get('tag') for o in outbounds if o.get('tag')}
 for r in cfg.get('route', {}).get('rules', []):
@@ -1061,9 +1061,28 @@ for r in cfg.get('route', {}).get('rules', []):
     if r.get('action') == 'route' and inb_list and r.get('outbound') in active_out_tags:
         kept = [t for t in inb_list if t != inb_tag and t in active_inb_tags]
         if kept:
-            rules.append({"inbound": kept, "action": "route", "outbound": r['outbound']})
+            relay_rules.append({"inbound": kept, "action": "route", "outbound": r['outbound']})
 if relay_tag:
-    rules.append({"inbound": [inb_tag], "action": "route", "outbound": relay_tag})
+    relay_rules.append({"inbound": [inb_tag], "action": "route", "outbound": relay_tag})
+
+rule_sets = [{
+    "type": "remote",
+    "tag": "geoip-cn",
+    "format": "binary",
+    "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs",
+    "http_client": "direct-http"
+}]
+if not relay_rules:
+    rules.append({"rule_set": "geosite-google", "action": "route", "outbound": "direct"})
+    rule_sets.append({
+        "type": "remote",
+        "tag": "geosite-google",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-google.srs",
+        "http_client": "direct-http"
+    })
+rules.append({"rule_set": "geoip-cn", "action": "reject"})
+rules.extend(relay_rules)
 
 # 清理已无任何规则引用的孤儿中转出站
 used_outs = {r.get('outbound') for r in rules if r.get('action') == 'route'} | {'direct'}
@@ -1073,13 +1092,7 @@ cfg['inbounds'] = inbounds
 cfg['outbounds'] = outbounds
 cfg['route'] = {
     "rules": rules,
-    "rule_set": [{
-        "type": "remote",
-        "tag": "geoip-cn",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs",
-        "http_client": "direct-http"
-    }],
+    "rule_set": rule_sets,
     "final": "direct",
     "default_domain_resolver": "dns-remote"
 }
@@ -1116,7 +1129,27 @@ table inet sb_res_guard {
     }
 }
 EOF
-    nft -f /etc/nftables.d/sb-res-guard.nft || true
+    if nft -f /etc/nftables.d/sb-res-guard.nft; then
+        cat << 'EOF' > /etc/systemd/system/sb-res-guard.service
+[Unit]
+Description=sing-box Residential Landing Port Whitelist
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/nftables.d/sb-res-guard.nft
+ExecStop=/usr/sbin/nft delete table inet sb_res_guard
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        systemctl daemon-reload && systemctl enable sb-res-guard.service >/dev/null 2>&1 || true
+        echo "  [OK] 家宽端口 ${LISTEN_PORT} 白名单已生效并配置开机自启 (sb-res-guard.service)"
+    else
+        echo "  [警告] nftables 家宽白名单加载失败！请检查白名单 IP (${RES_WHITELIST_IP}) 格式或内核 nftables 支持！" >&2
+    fi
 fi
 
 # 方案 3 端口跳跃
