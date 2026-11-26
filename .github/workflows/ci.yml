@@ -1,0 +1,34 @@
+name: Script & sing-box v1.14.4 Config Check
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Bash syntax check (bash -n)
+        run: |
+          bash -n singbox.sh
+          echo "singbox.sh syntax OK"
+
+      - name: ShellCheck error-level audit
+        run: |
+          shellcheck -S error singbox.sh
+          echo "ShellCheck error-level audit OK"
+
+      - name: Validate client.json with official sing-box v1.14.4
+        run: |
+          SB_VER="1.14.4"
+          curl -fsSL -o /tmp/sb.tar.gz "https://github.com/SagerNet/sing-box/releases/download/v${SB_VER}/sing-box-${SB_VER}-linux-amd64.tar.gz"
+          tar -xzf /tmp/sb.tar.gz -C /tmp
+          "/tmp/sing-box-${SB_VER}-linux-amd64/sing-box" version
+          "/tmp/sing-box-${SB_VER}-linux-amd64/sing-box" check -c client.json
+          echo "client.json passed sing-box v1.14.4 check"
