@@ -2,6 +2,8 @@
 
 [![sing-box](https://img.shields.io/badge/sing--box-v1.14.4-blue)](https://github.com/SagerNet/sing-box/releases)
 [![Zero Panel](https://img.shields.io/badge/Memory-~20MB%20Single%20Binary-green)](#)
+[![CI Check](https://github.com/CatEacc/vps-singbox-runbook/actions/workflows/ci.yml/badge.svg)](https://github.com/CatEacc/vps-singbox-runbook/actions/workflows/ci.yml)
+[![Wiki](https://img.shields.io/badge/Wiki-%E8%AF%A6%E7%BB%86%E6%95%99%E7%A8%8B%E4%B8%8EFAQ-purple)](https://github.com/CatEacc/vps-singbox-runbook/wiki)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Telegram](https://img.shields.io/badge/Telegram-%E7%8C%ABe%2Facc-26A5E4?logo=telegram)](https://t.me/CatCryptoMaster)
 
