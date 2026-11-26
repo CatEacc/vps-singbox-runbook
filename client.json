@@ -10,7 +10,7 @@
     },
     {
       "tag": "proxy-http",
-      "detour": "🌐 默认代理"
+      "detour": "🚀 前置优化机"
     }
   ],
   "dns": {
@@ -19,7 +19,7 @@
         "type": "https",
         "tag": "dns-remote",
         "server": "1.1.1.1",
-        "detour": "🌐 默认代理"
+        "detour": "🚀 前置优化机"
       },
       {
         "type": "https",
@@ -35,6 +35,18 @@
     ],
     "rules": [
       {
+        "domain_suffix": [
+          "msftconnecttest.com",
+          "msftncsi.com",
+          "captive.apple.com",
+          "connectivitycheck.gstatic.com",
+          "pool.ntp.org",
+          "time.apple.com",
+          "time.windows.com"
+        ],
+        "server": "dns-direct"
+      },
+      {
         "rule_set": ["geosite-cn", "geosite-private"],
         "server": "dns-direct"
       },
@@ -43,7 +55,7 @@
         "action": "reject"
       },
       {
-        "query_type": ["A", "AAAA"],
+        "query_type": ["A"],
         "server": "dns-fakeip"
       }
     ],

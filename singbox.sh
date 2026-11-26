@@ -23,7 +23,9 @@ if [ "$(id -u)" != "0" ]; then
     exit 1
 fi
 
-SERVER_IP=$(curl -s4m 5 https://api.ipify.org || curl -s4m 5 https://ipv4.icanhazip.com || echo "YOUR_SERVER_IP")
+SERVER_IP=$(curl -4fsSm 4 https://api.ipify.org 2>/dev/null || curl -4fsSm 4 https://ipv4.icanhazip.com 2>/dev/null || curl -6fsSm 4 https://api64.ipify.org 2>/dev/null || echo "YOUR_SERVER_IP")
+SERVER_IP=$(printf "%s" "$SERVER_IP" | tr -d '[:space:]')
+[[ "$SERVER_IP" =~ ^[0-9a-fA-F.:]+$ ]] || SERVER_IP="YOUR_SERVER_IP"
 OS_INFO=$(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-Linux}" || uname -s)
 KERNEL_INFO=$(uname -r | cut -d'-' -f1)
 ARCH_INFO=$(uname -m)
@@ -82,7 +84,7 @@ BANNER
 svc_badge() {
     if systemctl is-active --quiet "$1" 2>/dev/null; then
         printf "${GREEN}● 运行中${R}"
-    elif systemctl list-unit-files 2>/dev/null | grep -q "^$1"; then
+    elif systemctl list-unit-files "${1}.service" 2>/dev/null | grep -q "^${1}\.service"; then
         printf "${YELLOW}● 已停止${R}"
     else
         printf "${DIM}○ 未安装${R}"
@@ -129,7 +131,7 @@ if [ -z "$MODE" ]; then
     printf "      ${DIM}仅部署 BBR / 按内存分档缓冲 / 1GB Swap / MPTCP 防护 / 默认封 TCP 25 / Fail2ban${R}\n"
     printf "  ${GREEN}[5]${R} ${WHITE}一键导出所有节点链接 & Hy2 公钥指纹${R} ${CYAN}· 只读${R}\n"
     printf "  ${GREEN}[6]${R} ${WHITE}本机家宽 / 商宽 / 机房 IP 与环境快检${R} ${SKY}· 只读 · 不测流媒体${R}\n\n"
-    read -rp "$(printf "${YELLOW}  请输入方案编号 [1-6] (回车默认 1): ${R}")" MODE
+    read -rp "$(printf "${YELLOW}  请输入方案编号 [1-6] (回车默认 1): ${R}")" MODE || MODE="1"
     MODE="${MODE:-1}"
 fi
 
@@ -253,7 +255,7 @@ prompt_relay_target() {
             if ! command -v sshpass >/dev/null 2>&1; then
                 printf "  ${DIM}-> 正在安装 sshpass 以进行自动化对接...${R}\n"
                 export DEBIAN_FRONTEND=noninteractive
-                apt-get update -qq && apt-get install -y -qq sshpass >/dev/null 2>&1 || true
+                apt-get -o DPkg::Lock::Timeout=60 update -qq && apt-get -o DPkg::Lock::Timeout=60 install -y -qq sshpass >/dev/null 2>&1 || true
             fi
             printf "  ${CYAN}-> 正在连接家宽机 %s:%s 自动部署 SS-2022 落地并添加本机白名单 (%s)...${R}\n" "$RES_SSH_IP" "$RES_SSH_PORT" "${safe_src_ip:-无}"
             local remote_out=""
@@ -304,10 +306,11 @@ if "@" in body:
     if ":" not in cred_dec:
         cred_dec = b64dec(cred_dec)
     pwd = cred_dec.split(":", 1)[1] if ":" in cred_dec else cred_dec
-    host, port = hp.rsplit(":", 1)
-    port = port.strip()
-    if port.isdigit() and 1 <= int(port) <= 65535:
-        print(f"{host.strip('[]')}|{port}|{pwd.strip()}")
+    if ":" in hp:
+        host, port = hp.rsplit(":", 1)
+        port = port.strip()
+        if port.isdigit() and 1 <= int(port) <= 65535:
+            print(f"{host.strip('[]')}|{port}|{pwd.strip()}")
 SSPY
 ) || true
         if [ -n "$parsed" ]; then
@@ -559,6 +562,7 @@ SNIPY
         ;;
     5|links)
         echo ""
+        command -v python3 >/dev/null 2>&1 || { echo "  [提示] 当前系统缺少 python3，请先执行 apt-get update && apt-get install -y python3"; exit 1; }
         SERVER_IP="$SERVER_IP" python3 - << 'SBEXPPY'
 import json, os, base64, subprocess, urllib.parse, shutil
 
@@ -586,6 +590,7 @@ if not os.path.exists(cfg_path):
     print("  (未检测到 /etc/sing-box/config.json)")
 else:
     cfg = json.load(open(cfg_path, encoding='utf-8'))
+    uri_ip = f"[{server_ip}]" if ":" in server_ip and not server_ip.startswith("[") else server_ip
     found = 0
     for inb in cfg.get('inbounds', []):
         t = inb.get('type')
@@ -601,7 +606,7 @@ else:
                     pbk = x25519_pub(tls['reality']['private_key'])
                 except Exception:
                     pbk = 'DERIVE_FAILED'
-                link = f"vless://{u}@{server_ip}:{port}?type=tcp&security=reality&pbk={pbk}&fp=chrome&sni={sni}&sid={sid}&flow=xtls-rprx-vision#{urllib.parse.quote(tag)}"
+                link = f"vless://{u}@{uri_ip}:{port}?type=tcp&security=reality&pbk={pbk}&fp=chrome&sni={sni}&sid={sid}&flow=xtls-rprx-vision#{urllib.parse.quote(tag)}"
                 print(f"  [{tag}] {link}")
                 print_qr(link)
                 found += 1
@@ -613,7 +618,8 @@ else:
                 print_qr(link)
                 found += 1
         elif t == 'hysteria2':
-            pwd = (inb.get('users') or [{}])[0].get('password', '')
+            pwd = urllib.parse.quote((inb.get('users') or [{}])[0].get('password', ''), safe='')
+            sni_hy = inb.get('tls', {}).get('server_name') or 'www.bing.com'
             cert = inb.get('tls', {}).get('certificate_path', '/etc/sing-box/server.crt')
             fp = spki = ''
             if os.path.exists(cert):
@@ -625,7 +631,7 @@ else:
                     spki = base64.b64encode(hashlib.sha256(p2).digest()).decode()
                 except Exception:
                     pass
-            hy_url = f"hysteria2://{pwd}@{server_ip}:{port}?insecure=1&sni=www.bing.com&pinSHA256={fp}&mport=20000-50000#{urllib.parse.quote(tag)}"
+            hy_url = f"hysteria2://{pwd}@{uri_ip}:{port}?insecure=1&sni={sni_hy}&pinSHA256={fp}&mport=20000-50000#{urllib.parse.quote(tag)}"
             print(f"  [{tag}] {hy_url}")
             print_qr(hy_url)
             if spki:
@@ -635,7 +641,7 @@ else:
             method = inb.get('method', '')
             pwd = inb.get('password', '')
             cred = base64.urlsafe_b64encode(f"{method}:{pwd}".encode()).decode().rstrip('=')
-            print(f"  [{tag}] ss://{cred}@{server_ip}:{port}#{urllib.parse.quote(tag)}")
+            print(f"  [{tag}] ss://{cred}@{uri_ip}:{port}#{urllib.parse.quote(tag)}")
             print(f"    (家宽中转参数: IP={server_ip} | PORT={port} | PASS={pwd})")
             found += 1
     if not found:
@@ -646,6 +652,7 @@ SBEXPPY
         ;;
     6)
         echo ""
+        command -v python3 >/dev/null 2>&1 || { echo "  [提示] 当前系统缺少 python3，请先执行 apt-get update && apt-get install -y python3"; exit 1; }
         echo "=================================================================="
         echo "  本机家宽 / 商宽 / 机房 IP 与环境快检（纯只读，不碰流媒体）"
         echo "=================================================================="
@@ -701,10 +708,12 @@ try:
         is_proxy = bool(d.get("proxy"))
         is_mobile = bool(d.get("mobile"))
 except Exception:
+    pass
+if not asn_str and ip:
     try:
         d = json.loads(urllib.request.urlopen(f"https://ipinfo.io/{ip}/json", timeout=5).read().decode())
         asn_str = d.get("org", "")
-        loc = f"{d.get('country', '')} / {d.get('region', '')} / {d.get('city', '')}".strip(" /")
+        loc = loc or f"{d.get('country', '')} / {d.get('region', '')} / {d.get('city', '')}".strip(" /")
     except Exception:
         pass
 
@@ -799,9 +808,9 @@ esac
 # ------------------------------------------------------------------------------
 echo "[1/4] 更新系统组件并安装基础依赖..."
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -y && apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade -y
-apt-get install -y curl wget tar chrony iptables nftables iptables-persistent fail2ban python3 python3-systemd openssl qrencode || \
-  apt-get install -y curl wget tar chrony iptables nftables iptables-persistent fail2ban python3 python3-systemd openssl
+apt-get -o DPkg::Lock::Timeout=60 update -y && apt-get -o DPkg::Lock::Timeout=60 -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade -y
+apt-get -o DPkg::Lock::Timeout=60 install -y curl wget tar chrony iptables nftables iptables-persistent fail2ban python3 python3-systemd openssl qrencode || \
+  apt-get -o DPkg::Lock::Timeout=60 install -y curl wget tar chrony iptables nftables iptables-persistent fail2ban python3 openssl
 
 echo "[2/4] 配置原子钟对时、1GB Swap、默认封禁出站 TCP 25、Journald 50M 收敛与高并发内核栈..."
 systemctl enable --now chrony 2>/dev/null || true
@@ -858,7 +867,7 @@ ExecStop=/usr/sbin/nft delete table inet smtp_guard
 [Install]
 WantedBy=multi-user.target
 EOF
-    systemctl daemon-reload && systemctl enable smtp-guard.service >/dev/null 2>&1 || true
+    systemctl daemon-reload && systemctl enable --now smtp-guard.service >/dev/null 2>&1 || true
 fi
 
 cat << 'EOF' > /etc/systemd/journald.conf
@@ -1125,8 +1134,9 @@ elif mode == '1':
             }
         }
     })
+    uri_ip = f"[{server_ip}]" if ":" in server_ip and not server_ip.startswith("[") else server_ip
     print("RESULT_TYPE=LINK")
-    print(f"SHARE_LINK=vless://{u}@{server_ip}:{port}?type=tcp&security=reality&pbk={pub}&fp=chrome&sni={sni}&sid={sid}&flow=xtls-rprx-vision#CatEacc-SB-REALITY")
+    print(f"SHARE_LINK=vless://{u}@{uri_ip}:{port}?type=tcp&security=reality&pbk={pub}&fp=chrome&sni={sni}&sid={sid}&flow=xtls-rprx-vision#CatEacc-SB-REALITY")
 
 elif mode == '2':
     u = str(uuid.uuid4())
@@ -1176,8 +1186,9 @@ elif mode == '3':
         hy2_inb["up_mbps"] = 500
         hy2_inb["down_mbps"] = 100
     inbounds.append(hy2_inb)
+    uri_ip = f"[{server_ip}]" if ":" in server_ip and not server_ip.startswith("[") else server_ip
     print("RESULT_TYPE=LINK")
-    print(f"SHARE_LINK=hysteria2://{hy2_pass}@{server_ip}:{port}?insecure=1&sni=www.bing.com&pinSHA256={fp}&mport=20000-50000#CatEacc-SB-Hy2")
+    print(f"SHARE_LINK=hysteria2://{hy2_pass}@{uri_ip}:{port}?insecure=1&sni=www.bing.com&pinSHA256={fp}&mport=20000-50000#CatEacc-SB-Hy2")
     print(f"SPKI_SHA256={spki}")
 
 relay_rules = []
@@ -1316,7 +1327,7 @@ ExecStop=/usr/sbin/nft delete table inet sb_res_guard
 [Install]
 WantedBy=multi-user.target
 EOF
-            systemctl daemon-reload && systemctl enable sb-res-guard.service >/dev/null 2>&1 || true
+            systemctl daemon-reload && systemctl enable --now sb-res-guard.service >/dev/null 2>&1 || true
             echo "  [OK] 家宽端口 ${LISTEN_PORT} 白名单已生效并配置开机自启 (sb-res-guard.service)"
         else
             echo "  [警告] nftables 家宽白名单加载失败！请检查内核 nftables 支持！" >&2
@@ -1324,6 +1335,11 @@ EOF
     else
         echo "  [警告] 白名单 IP (${RES_WHITELIST_IP}) 含非法地址，已跳过防火墙白名单以免断联！" >&2
     fi
+elif [ "$MODE" = "1" ] && [ "$SUBMODE" = "2" ]; then
+    systemctl disable --now sb-res-guard.service >/dev/null 2>&1 || true
+    nft delete table inet sb_res_guard >/dev/null 2>&1 || true
+    rm -f /etc/nftables.d/sb-res-guard.nft /etc/systemd/system/sb-res-guard.service
+    systemctl daemon-reload >/dev/null 2>&1 || true
 fi
 
 # 方案 3 端口跳跃（覆盖前先停止旧服务，防止改端口残留旧 PREROUTING 规则）
@@ -1378,7 +1394,7 @@ if [ -f /tmp/sb_result.txt ]; then
         grep -E "^SS_(IP|PORT|PASS)=" /tmp/sb_result.txt | sed 's/^/  /'
     elif grep -q "RESULT_TYPE=LINK" /tmp/sb_result.txt; then
         printf "  ${YELLOW}【客户端导入链接】：${R}\n"
-        SB_URL=$(grep "^SHARE_LINK=" /tmp/sb_result.txt | cut -d'=' -f2-)
+        SB_URL=$(grep "^SHARE_LINK=" /tmp/sb_result.txt | cut -d'=' -f2- || true)
         echo "  ${SB_URL}"
         if command -v qrencode >/dev/null 2>&1 && [ -n "$SB_URL" ]; then
             printf "  ${YELLOW}【手机扫码导入（Shadowrocket / v2rayNG / Stash）】：${R}\n"
