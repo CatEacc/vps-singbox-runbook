@@ -31,6 +31,7 @@ jobs:
           src = open("singbox.sh", encoding="utf-8").read()
           blocks = re.findall(r"python3\s+-\s*<<\s*'([A-Z0-9_]+)'[^\n]*\n(.*?)\n\1\b", src, re.S)
           print(f"singbox.sh: Found {len(blocks)} embedded Python blocks")
+          assert len(blocks) == 7, f"Expected 7 embedded Python blocks, got {len(blocks)}"
           for idx, (tag, code) in enumerate(blocks, 1):
               ast.parse(code)
               print(f"  Block #{idx} ({tag}): syntax OK")
