@@ -3,11 +3,13 @@
 # CatEacc 生产级 sing-box (v1.14.4) 无面板极简一键部署与调优脚本
 # 仓库: https://github.com/CatEacc/vps-singbox-runbook
 # 适用系统: Debian 11/12/13, Ubuntu 20.04/22.04/24.04 (AMD64 / ARM64)
-# 四套方案（与 vps-xray-runbook 完全对齐，单内核常驻仅 ~20MB 内存）:
+# 六大模式（单内核常驻仅 ~20MB 内存，零弃用语法）:
 #   1) VLESS + REALITY + Vision（回车默认 443，内置一键家宽 SS-2022 落地 / 一键中转）
 #   2) Cloudflare CDN 优选（VLESS + WS + TLS，回车默认 2053）
 #   3) Hysteria 2 + 20000-50000 端口跳跃（默认 UDP 8443，单进程原生直通家宽）
 #   4) 纯系统底层内核调优模式（不装任何代理内核）
+#   5) 一键只读导出所有节点链接、二维码与 Hy2 公钥指纹
+#   6) 本机家宽 / 商宽 / 机房 IP 与环境只读快检
 # ==============================================================================
 
 set -euo pipefail
@@ -24,7 +26,8 @@ SERVER_IP=$(curl -s4m 5 https://api.ipify.org || curl -s4m 5 https://ipv4.icanha
 OS_INFO=$(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-Linux}" || uname -s)
 KERNEL_INFO=$(uname -r | cut -d'-' -f1)
 ARCH_INFO=$(uname -m)
-MEM_SHOW=$(free -m | awk '/Mem:/ {print $2}')
+MEM_SHOW=$(LC_ALL=C free -m 2>/dev/null | awk '/^Mem:/ {print $2}')
+MEM_SHOW="${MEM_SHOW:-0}"
 BBR_STAT=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "unknown")
 MPTCP_STAT=$(sysctl -n net.mptcp.enabled 2>/dev/null || echo "0")
 
@@ -85,6 +88,20 @@ svc_badge() {
     fi
 }
 
+validate_port() {
+    local p="$1" def="$2"
+    if [[ "$p" =~ ^[0-9]+$ ]] && [ "$p" -ge 1 ] && [ "$p" -le 65535 ]; then
+        echo "$p"
+    else
+        printf "  ${ORANGE}-> [提示] 端口 '%s' 非法，已自动使用默认端口 %s${R}\n" "$p" "$def" >&2
+        echo "$def"
+    fi
+}
+
+clean_domain() {
+    printf "%s" "$1" | sed -E 's#^https?://##; s#/.*$##; s#:[0-9]+$##' | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]'
+}
+
 MODE="${1:-}"
 if [ -z "$MODE" ]; then
     clear 2>/dev/null || true
@@ -108,7 +125,7 @@ if [ -z "$MODE" ]; then
     printf "  ${GREEN}[3]${R} ${WHITE}Hysteria 2 + 端口跳跃${R} ${PINK}· UDP 20000-50000 · 单进程原生直通家宽${R}\n"
     printf "      ${DIM}无需 SOCKS5 桥接省百兆内存，默认 UDP 8443 错开 TCP 443${R}\n"
     printf "  ${GREEN}[4]${R} ${WHITE}纯系统底层内核调优模式${R} ${ORANGE}· 零代理内核${R}\n"
-    printf "      ${DIM}仅部署 BBR / 按内存分档缓冲 / 1GB Swap / MPTCP 防护 / Fail2ban${R}\n"
+    printf "      ${DIM}仅部署 BBR / 按内存分档缓冲 / 1GB Swap / MPTCP 防护 / 默认封 TCP 25 / Fail2ban${R}\n"
     printf "  ${GREEN}[5]${R} ${WHITE}一键导出所有节点链接 & Hy2 公钥指纹${R} ${CYAN}· 只读${R}\n"
     printf "  ${GREEN}[6]${R} ${WHITE}本机家宽 / 商宽 / 机房 IP 与环境快检${R} ${SKY}· 只读 · 不测流媒体${R}\n\n"
     read -rp "$(printf "${YELLOW}  请输入方案编号 [1-6] (回车默认 1): ${R}")" MODE
@@ -205,7 +222,7 @@ try:
 except Exception as e:
     print(f"WARN|{e}")
 CHKPY
-)
+) || true
     if [[ "$chk_out" == OK\|* ]]; then
         printf "  ${GREEN}-> [实时复检通过]${R} ${WHITE}%s${R}: ${GREEN}%s${R}\n" "$target_sni" "${chk_out#OK|}"
     else
@@ -222,21 +239,26 @@ prompt_relay_target() {
 
     if [ "$RELAY_MODE" = "2" ]; then
         read -rp "$(printf "  ${SKY}-> 后端家宽机 SSH IP: ${R}")" RES_SSH_IP
+        RES_SSH_IP=$(printf "%s" "$RES_SSH_IP" | tr -d '[:space:]')
         read -rp "$(printf "  ${SKY}-> 后端家宽机 SSH 端口 (回车默认 22): ${R}")" RES_SSH_PORT
-        RES_SSH_PORT="${RES_SSH_PORT:-22}"
+        RES_SSH_PORT=$(validate_port "${RES_SSH_PORT:-22}" 22)
         read -rsp "$(printf "  ${SKY}-> 后端家宽机 root 密码 (输入不回显，仅内存生效不落盘): ${R}")" RES_SSH_PASS
         echo ""
-        if [ -n "$RES_SSH_IP" ] && [ -n "$RES_SSH_PASS" ]; then
+        local safe_src_ip=""
+        if [[ "$SERVER_IP" =~ ^[0-9a-fA-F.:]+$ ]]; then
+            safe_src_ip="$SERVER_IP"
+        fi
+        if [[ "$RES_SSH_IP" =~ ^[a-zA-Z0-9.:-]+$ ]] && [ -n "$RES_SSH_PASS" ]; then
             if ! command -v sshpass >/dev/null 2>&1; then
                 printf "  ${DIM}-> 正在安装 sshpass 以进行自动化对接...${R}\n"
                 export DEBIAN_FRONTEND=noninteractive
                 apt-get update -qq && apt-get install -y -qq sshpass >/dev/null 2>&1 || true
             fi
-            printf "  ${CYAN}-> 正在连接家宽机 %s:%s 自动部署 SS-2022 落地并添加本机白名单 (%s)...${R}\n" "$RES_SSH_IP" "$RES_SSH_PORT" "$SERVER_IP"
+            printf "  ${CYAN}-> 正在连接家宽机 %s:%s 自动部署 SS-2022 落地并添加本机白名单 (%s)...${R}\n" "$RES_SSH_IP" "$RES_SSH_PORT" "${safe_src_ip:-无}"
             local remote_out=""
             if command -v sshpass >/dev/null 2>&1; then
                 remote_out=$(SSHPASS="$RES_SSH_PASS" sshpass -e ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -p "$RES_SSH_PORT" "root@${RES_SSH_IP}" \
-                    "curl -fsSL https://raw.githubusercontent.com/CatEacc/vps-singbox-runbook/main/singbox.sh -o /tmp/_res_sb.sh && printf '2\n\n%s\n' '${SERVER_IP}' | bash /tmp/_res_sb.sh 1; rm -f /tmp/_res_sb.sh" 2>&1 || true)
+                    "curl -fsSL https://raw.githubusercontent.com/CatEacc/vps-singbox-runbook/main/singbox.sh -o /tmp/_res_sb.sh && printf '2\n\n%s\n' '${safe_src_ip}' | bash /tmp/_res_sb.sh 1; rm -f /tmp/_res_sb.sh" 2>&1 || true)
             fi
             unset RES_SSH_PASS SSHPASS
             RES_IP=$(printf "%s\n" "$remote_out" | grep -oE 'SS_IP=[^[:space:]]+' | tail -n 1 | cut -d'=' -f2- || true)
@@ -250,31 +272,40 @@ prompt_relay_target() {
             fi
         else
             unset RES_SSH_PASS SSHPASS
-            printf "  ${ORANGE}-> [提示] IP 或密码为空，自动切换为方式 1：${R}\n"
+            printf "  ${ORANGE}-> [提示] IP 格式非法或密码为空，自动切换为方式 1：${R}\n"
         fi
     fi
 
     read -rp "$(printf "  ${YELLOW}-> 请粘贴家宽 ss:// 链接，或直接输入家宽机 IP: ${R}")" SS_OR_IP
-    if [[ "$SS_OR_IP" == ss://* ]]; then
+    if [[ "$SS_OR_IP" == ss://* ]] && command -v python3 >/dev/null 2>&1; then
         local parsed
         parsed=$(SS_URI="$SS_OR_IP" python3 - << 'SSPY'
 import os, base64, urllib.parse
 u = os.environ.get("SS_URI", "").strip()
-u = u[5:].split("#", 1)[0].split("?", 1)[0]
-if "@" in u:
-    cred, hp = u.rsplit("@", 1)
-    cred = urllib.parse.unquote(cred)
-    if ":" not in cred:
-        pad = "=" * ((4 - len(cred) % 4) % 4)
+body = u[5:].split("#", 1)[0].split("?", 1)[0].rstrip("/")
+def b64dec(s):
+    s = urllib.parse.unquote(s).strip()
+    pad = "=" * (-len(s) % 4)
+    for fn in (base64.urlsafe_b64decode, base64.b64decode):
         try:
-            cred = base64.urlsafe_b64decode(cred + pad).decode("utf-8", "ignore")
+            return fn(s + pad).decode("utf-8")
         except Exception:
-            cred = base64.b64decode(cred + pad).decode("utf-8", "ignore")
-    pwd = cred.split(":", 1)[1] if ":" in cred else cred
+            pass
+    return s
+if "@" not in body:
+    body = b64dec(body)
+if "@" in body:
+    cred, hp = body.rsplit("@", 1)
+    cred_dec = urllib.parse.unquote(cred)
+    if ":" not in cred_dec:
+        cred_dec = b64dec(cred_dec)
+    pwd = cred_dec.split(":", 1)[1] if ":" in cred_dec else cred_dec
     host, port = hp.rsplit(":", 1)
-    print(f"{host.strip('[]')}|{port.strip()}|{pwd.strip()}")
+    port = port.strip()
+    if port.isdigit() and 1 <= int(port) <= 65535:
+        print(f"{host.strip('[]')}|{port}|{pwd.strip()}")
 SSPY
-)
+) || true
         if [ -n "$parsed" ]; then
             IFS='|' read -r RES_IP RES_PORT RES_SS_PASS <<< "$parsed"
             printf "  ${GREEN}-> [解析成功]${R} 目标家宽: ${CYAN}%s:%s${R} ${DIM}(密钥已自动提取)${R}\n" "$RES_IP" "$RES_PORT"
@@ -284,10 +315,12 @@ SSPY
             read -rp "$(printf "  ${SKY}-> 请输入后端家宽机 IP: ${R}")" RES_IP
         fi
     else
-        RES_IP="$SS_OR_IP"
+        RES_IP=$(printf "%s" "$SS_OR_IP" | tr -d '[:space:]')
     fi
     read -rp "$(printf "  ${SKY}-> 请输入后端家宽机 SS-2022 端口: ${R}")" RES_PORT
+    RES_PORT=$(validate_port "${RES_PORT:-30001}" 30001)
     read -rp "$(printf "  ${SKY}-> 请输入后端家宽机 SS-2022 密钥 (Base64): ${R}")" RES_SS_PASS
+    RES_SS_PASS=$(printf "%s" "$RES_SS_PASS" | tr -d '[:space:]')
 }
 
 case "$MODE" in
@@ -302,11 +335,11 @@ case "$MODE" in
         if [ "$SUBMODE" = "2" ]; then
             DEF_PORT=$((20000 + RANDOM % 30000))
             read -rp "$(printf "  ${YELLOW}请输入家宽落地 SS-2022 监听端口 (回车默认随机高位端口 ${CYAN}${DEF_PORT}${YELLOW}): ${R}")" LISTEN_PORT
-            LISTEN_PORT="${LISTEN_PORT:-$DEF_PORT}"
+            LISTEN_PORT=$(validate_port "${LISTEN_PORT:-$DEF_PORT}" "$DEF_PORT")
             read -rp "$(printf "  ${YELLOW}请输入允许连入的前置优化机 IP（留空不设白名单，多个用逗号分隔）: ${R}")" RES_WHITELIST_IP
         else
             read -rp "$(printf "  ${YELLOW}请输入 REALITY 监听端口 (回车默认 443，也可手动输入如 8443): ${R}")" LISTEN_PORT
-            LISTEN_PORT="${LISTEN_PORT:-443}"
+            LISTEN_PORT=$(validate_port "${LISTEN_PORT:-443}" 443)
             printf "\n  ${CYAN}─── 请选择 REALITY 回落目标域名 (SNI) ───${R}\n"
             printf "  ${GREEN}[1]${R} ${WHITE}按机房地区自动测速优选${R} ${ORANGE}★ 推荐：本土 5 站 + 全球兜底池 + 选后自动实时复检${R}\n"
             printf "  ${GREEN}[2]${R} ${WHITE}addons.mozilla.org${R}     ${DIM}（免测默认：Firefox 扩展商店 · 纯海外无国内 CDN）${R}\n"
@@ -435,7 +468,7 @@ if glb_res:
     for _, rtt, host, desc in glb_res[:5]:
         print(f"ITEM|{host}|{rtt:.1f}|{desc}")
 SNIPY
-)
+) || true
                         if [ -n "$SNI_LIST" ]; then
                             idx=1
                             SNI_ARR=()
@@ -450,16 +483,20 @@ SNIPY
                                     idx=$((idx + 1))
                                 fi
                             done <<< "$SNI_LIST"
-                            echo ""
-                            read -rp "$(printf "  ${YELLOW}-> 请选择编号 [1-${#SNI_ARR[@]}] (回车默认 1): ${R}")" PICK_IDX
-                            PICK_IDX="${PICK_IDX:-1}"
-                            if [[ "$PICK_IDX" =~ ^[0-9]+$ ]] && [ "$PICK_IDX" -ge 1 ] && [ "$PICK_IDX" -le "${#SNI_ARR[@]}" ]; then
-                                REALITY_SNI="${SNI_ARR[$((PICK_IDX - 1))]}"
+                            if [ "${#SNI_ARR[@]}" -gt 0 ]; then
+                                echo ""
+                                read -rp "$(printf "  ${YELLOW}-> 请选择编号 [1-${#SNI_ARR[@]}] (回车默认 1): ${R}")" PICK_IDX
+                                PICK_IDX="${PICK_IDX:-1}"
+                                if [[ "$PICK_IDX" =~ ^[0-9]+$ ]] && [ "$PICK_IDX" -ge 1 ] && [ "$PICK_IDX" -le "${#SNI_ARR[@]}" ]; then
+                                    REALITY_SNI="${SNI_ARR[$((PICK_IDX - 1))]}"
+                                else
+                                    REALITY_SNI="${SNI_ARR[0]}"
+                                fi
+                                printf "  ${ORANGE}-> 已选定目标 SNI: ${WHITE}%s${R}\n" "$REALITY_SNI"
+                                verify_reality_sni "$REALITY_SNI"
                             else
-                                REALITY_SNI="${SNI_ARR[0]}"
+                                REALITY_SNI="addons.mozilla.org"
                             fi
-                            printf "  ${ORANGE}-> 已选定目标 SNI: ${WHITE}%s${R}\n" "$REALITY_SNI"
-                            verify_reality_sni "$REALITY_SNI"
                         else
                             printf "  ${ORANGE}-> [提示] 测速未命中可用站点，自动回退 addons.mozilla.org${R}\n"
                             REALITY_SNI="addons.mozilla.org"
@@ -473,7 +510,11 @@ SNIPY
                 3) REALITY_SNI="www.gentoo.org" ;;
                 4)
                     read -rp "$(printf "  ${YELLOW}-> 请输入自定义目标域名: ${R}")" SNI_CUSTOM
-                    REALITY_SNI="${SNI_CUSTOM:-addons.mozilla.org}"
+                    REALITY_SNI=$(clean_domain "${SNI_CUSTOM:-addons.mozilla.org}")
+                    if [[ ! "$REALITY_SNI" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]; then
+                        printf "  ${ORANGE}-> [提示] 域名格式异常，自动回退 addons.mozilla.org${R}\n"
+                        REALITY_SNI="addons.mozilla.org"
+                    fi
                     verify_reality_sni "$REALITY_SNI"
                     ;;
                 *) REALITY_SNI="addons.mozilla.org" ;;
@@ -486,14 +527,22 @@ SNIPY
         fi
         ;;
     2)
-        read -rp "$(printf "  ${YELLOW}请输入 Cloudflare 回源端口 (回车默认 2053，支持 443/2053/2083/8443): ${R}")" LISTEN_PORT
-        LISTEN_PORT="${LISTEN_PORT:-2053}"
+        read -rp "$(printf "  ${YELLOW}请输入 Cloudflare 回源端口 (回车默认 2053，支持 443/2053/2083/2087/2096/8443): ${R}")" LISTEN_PORT
+        LISTEN_PORT=$(validate_port "${LISTEN_PORT:-2053}" 2053)
+        case "$LISTEN_PORT" in
+            443|2053|2083|2087|2096|8443) ;;
+            *) printf "  ${ORANGE}-> [警告] 端口 %s 不在 Cloudflare 免费版 HTTPS 端口列表 (443/2053/2083/2087/2096/8443) 中，开启小黄云将无法回源！${R}\n" "$LISTEN_PORT" ;;
+        esac
         read -rp "$(printf "  ${YELLOW}请输入 Cloudflare CDN 域名 (如 cf.example.com): ${R}")" CF_IN
-        CF_DOMAIN="${CF_IN:-cf.example.com}"
+        CF_DOMAIN=$(clean_domain "${CF_IN:-cf.example.com}")
+        if [[ ! "$CF_DOMAIN" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]; then
+            echo "[错误] Cloudflare 域名格式非法: ${CF_DOMAIN}"
+            exit 1
+        fi
         ;;
     3)
         read -rp "$(printf "  ${YELLOW}请输入 Hysteria 2 本地 UDP 监听端口 (回车默认 8443 错开 TCP 443，也可填 443): ${R}")" LISTEN_PORT
-        LISTEN_PORT="${LISTEN_PORT:-8443}"
+        LISTEN_PORT=$(validate_port "${LISTEN_PORT:-8443}" 8443)
         read -rp "$(printf "  ${YELLOW}是否为廉价高丢包线路开启 Brutal？(CN2/9929 精品线强烈选 n) [y/N]: ${R}")" HY2_BRUTAL
         HY2_BRUTAL="${HY2_BRUTAL:-n}"
         read -rp "$(printf "  ${YELLOW}是否一键中转到后端海外家宽机？[y/N]: ${R}")" ENABLE_RELAY
@@ -532,7 +581,7 @@ print("==================================================================")
 if not os.path.exists(cfg_path):
     print("  (未检测到 /etc/sing-box/config.json)")
 else:
-    cfg = json.load(open(cfg_path))
+    cfg = json.load(open(cfg_path, encoding='utf-8'))
     found = 0
     for inb in cfg.get('inbounds', []):
         t = inb.get('type')
@@ -555,7 +604,7 @@ else:
             elif tls.get('enabled'):
                 host = tls.get('server_name', server_ip)
                 path = urllib.parse.quote(inb.get('transport', {}).get('path', '/vless-ws'), safe='')
-                link = f"vless://{u}@{host}:{port}?type=ws&security=tls&path={path}&host={host}&sni={host}#{urllib.parse.quote(tag)}"
+                link = f"vless://{u}@{host}:{port}?type=ws&security=tls&path={path}&host={host}&sni={host}&alpn=http%2F1.1&fp=chrome#{urllib.parse.quote(tag)}"
                 print(f"  [{tag}] {link}")
                 print_qr(link)
                 found += 1
@@ -566,7 +615,10 @@ else:
             if os.path.exists(cert):
                 try:
                     fp = subprocess.check_output(['openssl', 'x509', '-in', cert, '-noout', '-sha256', '-fingerprint'], text=True).split('=', 1)[1].strip()
-                    spki = subprocess.check_output(f"openssl x509 -in {cert} -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl enc -base64", shell=True, text=True).strip()
+                    p1 = subprocess.check_output(['openssl', 'x509', '-in', cert, '-pubkey', '-noout'])
+                    p2 = subprocess.check_output(['openssl', 'pkey', '-pubin', '-outform', 'der'], input=p1)
+                    import hashlib
+                    spki = base64.b64encode(hashlib.sha256(p2).digest()).decode()
                 except Exception:
                     pass
             hy_url = f"hysteria2://{pwd}@{server_ip}:{port}?insecure=1&sni=www.bing.com&pinSHA256={fp}&mport=20000-50000#{urllib.parse.quote(tag)}"
@@ -597,7 +649,7 @@ SBEXPPY
 import os, json, socket, subprocess, urllib.request
 
 ip = os.environ.get("SERVER_IP", "").strip()
-if not ip or ip == "未知":
+if not ip or ip in ("未知", "YOUR_SERVER_IP"):
     for u in ("https://api.ipify.org", "https://ifconfig.me/ip"):
         try:
             ip = urllib.request.urlopen(u, timeout=4).read().decode().strip()
@@ -736,24 +788,71 @@ ISPPY
 esac
 
 # ------------------------------------------------------------------------------
-# 阶段一：系统底层优化、Swap 气囊、日志收敛、Fail2ban 与高并发内核栈
+# 阶段一：系统底层优化、Swap 气囊、默认封禁出站 TCP 25、日志收敛、Fail2ban 与高并发内核栈
 # ------------------------------------------------------------------------------
 echo "[1/4] 更新系统组件并安装基础依赖..."
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -y && apt-get upgrade -y
+apt-get update -y && apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade -y
 apt-get install -y curl wget tar chrony iptables nftables iptables-persistent fail2ban python3 python3-systemd openssl qrencode || \
   apt-get install -y curl wget tar chrony iptables nftables iptables-persistent fail2ban python3 python3-systemd openssl
 
-echo "[2/4] 配置原子钟对时、1GB Swap、Journald 50M 收敛与高并发内核栈..."
-systemctl enable --now chrony
-chronyc makestep || true
+echo "[2/4] 配置原子钟对时、1GB Swap、默认封禁出站 TCP 25、Journald 50M 收敛与高并发内核栈..."
+systemctl enable --now chrony 2>/dev/null || true
+chronyc makestep 2>/dev/null || true
 timedatectl set-timezone Asia/Shanghai 2>/dev/null || true
 
 if [ ! -f /swapfile ]; then
-    fallocate -l 1G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=1024
-    chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile || true
+    if fallocate -l 1G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=1024 status=none; then
+        chmod 600 /swapfile
+        mkswap /swapfile >/dev/null 2>&1 || true
+        if ! swapon /swapfile 2>/dev/null; then
+            rm -f /swapfile
+            dd if=/dev/zero of=/swapfile bs=1M count=1024 status=none 2>/dev/null || true
+            chmod 600 /swapfile
+            mkswap /swapfile >/dev/null 2>&1 || true
+            swapon /swapfile 2>/dev/null || rm -f /swapfile
+        fi
+    fi
 fi
-grep -q "/swapfile" /etc/fstab || echo "/swapfile none swap sw 0 0" >> /etc/fstab
+if swapon --show=NAME --noheadings 2>/dev/null | grep -qx "/swapfile"; then
+    grep -q "/swapfile" /etc/fstab || echo "/swapfile none swap sw,nofail 0 0" >> /etc/fstab
+    if [ -f /swap.img ] && [ "$(stat -c%s /swap.img 2>/dev/null || echo 1073741824)" -lt 943718400 ]; then
+        swapoff /swap.img 2>/dev/null || true
+        sed -i '\|/swap\.img|d' /etc/fstab
+        rm -f /swap.img
+    fi
+fi
+
+if command -v nft >/dev/null 2>&1; then
+    mkdir -p /etc/nftables.d
+    cat << 'EOF' > /etc/nftables.d/smtp-guard.nft
+table inet smtp_guard
+delete table inet smtp_guard
+table inet smtp_guard {
+    chain output {
+        type filter hook output priority filter; policy accept;
+        tcp dport 25 reject with tcp reset
+    }
+}
+EOF
+    nft -f /etc/nftables.d/smtp-guard.nft 2>/dev/null || true
+    cat << 'EOF' > /etc/systemd/system/smtp-guard.service
+[Unit]
+Description=Block Outbound TCP 25 (SMTP Anti-Spam)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/nftables.d/smtp-guard.nft
+ExecStop=/usr/sbin/nft delete table inet smtp_guard
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload && systemctl enable smtp-guard.service >/dev/null 2>&1 || true
+fi
 
 cat << 'EOF' > /etc/systemd/journald.conf
 [Journal]
@@ -764,6 +863,8 @@ MaxRetentionSec=7day
 ForwardToSyslog=no
 EOF
 systemctl restart systemd-journald 2>/dev/null || true
+journalctl --rotate 2>/dev/null || true
+journalctl --vacuum-size=40M >/dev/null 2>&1 || true
 systemctl disable --now apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service 2>/dev/null || true
 
 if [ -f /etc/gai.conf ]; then
@@ -771,8 +872,9 @@ if [ -f /etc/gai.conf ]; then
     echo "precedence ::ffff:0:0/96  100" >> /etc/gai.conf
 fi
 
-SSH_PORTS=$(sshd -T 2>/dev/null | awk '$1=="port"{print $2}' | paste -sd, -)
-SSH_PORTS=${SSH_PORTS:-22}
+mkdir -p /run/sshd
+SSH_PORTS=$( (sshd -T 2>/dev/null || true) | awk '$1=="port"{print $2}' | paste -sd, - )
+SSH_PORTS="${SSH_PORTS:-22}"
 cat << EOF > /etc/fail2ban/jail.local
 [DEFAULT]
 bantime = 86400
@@ -788,14 +890,15 @@ enabled = true
 port = $SSH_PORTS
 mode = aggressive
 EOF
-systemctl enable --now fail2ban && systemctl restart fail2ban
+systemctl enable --now fail2ban 2>/dev/null || true
+systemctl restart fail2ban 2>/dev/null || true
 
 mkdir -p /etc/modules-load.d
 printf "tcp_bbr\nnf_conntrack\n" > /etc/modules-load.d/99-proxy.conf
 modprobe tcp_bbr 2>/dev/null || true
 modprobe nf_conntrack 2>/dev/null || true
 
-MEM_MB=$(free -m | awk '/Mem:/ {print $2}')
+MEM_MB=$(LC_ALL=C free -m 2>/dev/null | awk '/^Mem:/ {print $2}')
 if [ "${MEM_MB:-1000}" -le 700 ]; then
     RMEM_MAX=16777216; TCP_MAX=8388608; DEF_BUF=262144; CONN_MAX=65536
 elif [ "${MEM_MB:-1000}" -lt 1500 ]; then
@@ -844,9 +947,17 @@ grep -vE '^\s*#|^\s*$' /etc/sysctl.d/99-zzz-proxy-tuning.conf | sed 's/^-//' | w
     sysctl -w "$(echo "$k" | xargs)=$(echo "$v" | xargs)" >/dev/null 2>&1 || true
 done
 
+cat << 'EOF' > /etc/security/limits.d/99-nofile.conf
+* soft nofile 1048576
+* hard nofile 1048576
+root soft nofile 1048576
+root hard nofile 1048576
+EOF
+
 if [ "$MODE" = "4" ]; then
     echo "=================================================================="
-    echo "  【方案 4】纯系统底层内核调优完成！BBR=$(sysctl -n net.ipv4.tcp_congestion_control) MPTCP=$(sysctl -n net.mptcp.enabled 2>/dev/null || echo 0)"
+    echo "  【方案 4】纯系统底层内核调优完成！BBR=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo N/A) MPTCP=$(sysctl -n net.mptcp.enabled 2>/dev/null || echo 0)"
+    echo "  出站 TCP 25: 已通过 smtp-guard.service 默认封禁"
     echo "=================================================================="
     exit 0
 fi
@@ -856,19 +967,34 @@ fi
 # ------------------------------------------------------------------------------
 echo "[3/4] 下载官方 sing-box v${SB_VERSION}..."
 case "$ARCH_INFO" in
-    x86_64)  SB_ARCH="amd64" ;;
-    aarch64) SB_ARCH="arm64" ;;
-    *)       echo "[错误] 暂不支持架构: ${ARCH_INFO}"; exit 1 ;;
+    x86_64|amd64)   SB_ARCH="amd64" ;;
+    aarch64|arm64)  SB_ARCH="arm64" ;;
+    *)              echo "[错误] 暂不支持架构: ${ARCH_INFO}"; exit 1 ;;
 esac
 
 mkdir -p /etc/sing-box /tmp/sb-dl
 curl -fsSL -o /tmp/sb-dl/sb.tar.gz "https://github.com/SagerNet/sing-box/releases/download/v${SB_VERSION}/sing-box-${SB_VERSION}-linux-${SB_ARCH}.tar.gz"
 tar -xzf /tmp/sb-dl/sb.tar.gz -C /tmp/sb-dl
-install -m 755 "/tmp/sb-dl/sing-box-${SB_VERSION}-linux-${SB_ARCH}/sing-box" /usr/local/bin/sing-box
+install -m 755 "/tmp/sb-dl/sing-box-${SB_VERSION}-linux-${SB_ARCH}/sing-box" /usr/local/bin/sing-box.new && mv -f /usr/local/bin/sing-box.new /usr/local/bin/sing-box
 rm -rf /tmp/sb-dl
 
-# 若为方案 2 (CF TLS) 或方案 3 (Hy2)，生成 10 年自签 EC 证书
-if [ "$MODE" = "2" ] || [ "$MODE" = "3" ]; then
+if [ "$MODE" = "2" ]; then
+    NEED_SB_CF="0"
+    if [ ! -f /etc/sing-box/cf.crt ] || [ ! -f /etc/sing-box/cf.key ]; then
+        NEED_SB_CF="1"
+    elif ! openssl x509 -in /etc/sing-box/cf.crt -noout -subject 2>/dev/null | grep -Fq "CN = ${CF_DOMAIN}" && \
+         ! openssl x509 -in /etc/sing-box/cf.crt -noout -subject 2>/dev/null | grep -Fq "CN=${CF_DOMAIN}"; then
+        NEED_SB_CF="1"
+    fi
+    if [ "$NEED_SB_CF" = "1" ]; then
+        openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -days 3650 -nodes \
+          -keyout /etc/sing-box/cf.key -out /etc/sing-box/cf.crt \
+          -subj "/CN=${CF_DOMAIN}" -addext "subjectAltName=DNS:${CF_DOMAIN}" 2>/dev/null
+    fi
+    chmod 644 /etc/sing-box/cf.crt && chmod 600 /etc/sing-box/cf.key
+fi
+
+if [ "$MODE" = "3" ]; then
     if [ ! -f /etc/sing-box/server.crt ] || [ ! -f /etc/sing-box/server.key ]; then
         openssl ecparam -genkey -name prime256v1 -out /etc/sing-box/server.key
         openssl req -new -x509 -days 3650 -key /etc/sing-box/server.key -out /etc/sing-box/server.crt \
@@ -883,7 +1009,7 @@ MODE="$MODE" SUBMODE="$SUBMODE" LISTEN_PORT="$LISTEN_PORT" REALITY_SNI="$REALITY
 CF_DOMAIN="$CF_DOMAIN" HY2_BRUTAL="$HY2_BRUTAL" SERVER_IP="$SERVER_IP" \
 ENABLE_RELAY="$ENABLE_RELAY" RES_IP="$RES_IP" RES_PORT="$RES_PORT" RES_SS_PASS="$RES_SS_PASS" \
 python3 - << 'PYEOF' > /tmp/sb_result.txt
-import json, os, uuid, secrets, subprocess, base64
+import json, os, uuid, secrets, subprocess, base64, hashlib
 os.umask(0o077)
 
 mode = os.environ['MODE']
@@ -901,7 +1027,7 @@ res_ss_pass = os.environ['RES_SS_PASS'].strip()
 cfg_path = '/etc/sing-box/config.json'
 if os.path.exists(cfg_path):
     try:
-        cfg = json.load(open(cfg_path))
+        cfg = json.load(open(cfg_path, encoding='utf-8'))
     except Exception:
         cfg = {}
 else:
@@ -929,14 +1055,15 @@ def is_same_socket(existing, target_port, target_proto):
     if existing.get('listen_port') != target_port:
         return False
     etype = existing.get('type', '')
-    # hysteria2 仅占 UDP，vless 仅占 TCP，二者同端口不冲突；shadowsocks 占 TCP+UDP
     if (etype == 'hysteria2' and target_proto == 'vless') or (etype == 'vless' and target_proto == 'hy2'):
         return False
     return True
 
+removed_tags = {i.get('tag') for i in cfg.get('inbounds', []) if (i.get('tag') == inb_tag or is_same_socket(i, port, proto_key)) and i.get('tag')}
 inbounds = [i for i in cfg.get('inbounds', []) if i.get('tag') != inb_tag and not is_same_socket(i, port, proto_key)]
 relay_tag = f"out-res-{inb_tag}"
-outbounds = [o for o in cfg.get('outbounds', []) if o.get('tag') not in ('direct', relay_tag)]
+stale_out_tags = {'direct', relay_tag} | {f"out-res-{t}" for t in removed_tags}
+outbounds = [o for o in cfg.get('outbounds', []) if o.get('tag') not in stale_out_tags]
 outbounds.insert(0, {"type": "direct", "tag": "direct"})
 
 if enable_relay and res_ip and res_port and res_ss_pass:
@@ -1005,8 +1132,9 @@ elif mode == '2':
         "tls": {
             "enabled": True,
             "server_name": cf_domain,
-            "certificate_path": "/etc/sing-box/server.crt",
-            "key_path": "/etc/sing-box/server.key"
+            "alpn": ["http/1.1"],
+            "certificate_path": "/etc/sing-box/cf.crt",
+            "key_path": "/etc/sing-box/cf.key"
         },
         "transport": {
             "type": "ws",
@@ -1015,15 +1143,14 @@ elif mode == '2':
         }
     })
     print("RESULT_TYPE=LINK")
-    print(f"SHARE_LINK=vless://{u}@{cf_domain}:{port}?type=ws&security=tls&path=%2Fvless-ws&host={cf_domain}&sni={cf_domain}#CatEacc-SB-CF-WS")
+    print(f"SHARE_LINK=vless://{u}@{cf_domain}:{port}?type=ws&security=tls&path=%2Fvless-ws&host={cf_domain}&sni={cf_domain}&alpn=http%2F1.1&fp=chrome#CatEacc-SB-CF-WS")
 
 elif mode == '3':
     hy2_pass = ''.join(secrets.choice('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(16))
     fp = subprocess.check_output(['openssl', 'x509', '-in', '/etc/sing-box/server.crt', '-noout', '-sha256', '-fingerprint'], text=True).split('=', 1)[1].strip()
-    spki = subprocess.check_output(
-        "openssl x509 -in /etc/sing-box/server.crt -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl enc -base64",
-        shell=True, text=True
-    ).strip()
+    pub_pem = subprocess.check_output(['openssl', 'x509', '-in', '/etc/sing-box/server.crt', '-pubkey', '-noout'])
+    pub_der = subprocess.check_output(['openssl', 'pkey', '-pubin', '-outform', 'der'], input=pub_pem)
+    spki = base64.b64encode(hashlib.sha256(pub_der).digest()).decode()
     hy2_inb = {
         "type": "hysteria2",
         "tag": inb_tag,
@@ -1046,24 +1173,31 @@ elif mode == '3':
     print(f"SHARE_LINK=hysteria2://{hy2_pass}@{server_ip}:{port}?insecure=1&sni=www.bing.com&pinSHA256={fp}&mport=20000-50000#CatEacc-SB-Hy2")
     print(f"SPKI_SHA256={spki}")
 
-rules = [
-    {"action": "sniff"},
-    {"protocol": "bittorrent", "action": "reject"},
-    {"port": [25], "action": "reject"},
-    {"ip_is_private": True, "action": "reject"},
-]
 relay_rules = []
 active_inb_tags = {i.get('tag') for i in inbounds if i.get('tag')}
 active_out_tags = {o.get('tag') for o in outbounds if o.get('tag')}
 for r in cfg.get('route', {}).get('rules', []):
     inb_val = r.get('inbound')
     inb_list = [inb_val] if isinstance(inb_val, str) else (inb_val if isinstance(inb_val, list) else None)
-    if r.get('action') == 'route' and inb_list and r.get('outbound') in active_out_tags:
-        kept = [t for t in inb_list if t != inb_tag and t in active_inb_tags]
+    if r.get('action') == 'route' and inb_list and r.get('outbound') in active_out_tags and str(r.get('outbound', '')).startswith('out-res-'):
+        kept = [t for t in inb_list if t != inb_tag and t not in removed_tags and t in active_inb_tags]
         if kept:
             relay_rules.append({"inbound": kept, "action": "route", "outbound": r['outbound']})
 if relay_tag:
     relay_rules.append({"inbound": [inb_tag], "action": "route", "outbound": relay_tag})
+
+relayed_inb_set = {t for rr in relay_rules for t in rr.get('inbound', [])}
+has_direct_inb = bool(active_inb_tags - relayed_inb_set)
+
+rules = [
+    {"action": "sniff"},
+    {"protocol": "bittorrent", "action": "reject"},
+    {"port": [25], "action": "reject"},
+    {"ip_is_private": True, "action": "reject"},
+    {"rule_set": "geoip-cn", "action": "reject"},
+]
+# 中转流量在此直接按原域名转发至后端家宽落地，避免前置机本地 DNS 污染出口地理就近解析
+rules.extend(relay_rules)
 
 rule_sets = [{
     "type": "remote",
@@ -1072,8 +1206,13 @@ rule_sets = [{
     "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs",
     "http_client": "direct-http"
 }]
-if not relay_rules:
+
+# 本机直连流量：先放行 geosite-google 防误杀 Google Play，再执行 resolve 触发私网/回国 IP 强校验（sing-box v1.11+ 必配）
+if has_direct_inb or not relay_rules:
     rules.append({"rule_set": "geosite-google", "action": "route", "outbound": "direct"})
+    rules.append({"action": "resolve", "strategy": "ipv4_only"})
+    rules.append({"ip_is_private": True, "action": "reject"})
+    rules.append({"rule_set": "geoip-cn", "action": "reject"})
     rule_sets.append({
         "type": "remote",
         "tag": "geosite-google",
@@ -1081,10 +1220,7 @@ if not relay_rules:
         "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-google.srs",
         "http_client": "direct-http"
     })
-rules.append({"rule_set": "geoip-cn", "action": "reject"})
-rules.extend(relay_rules)
 
-# 清理已无任何规则引用的孤儿中转出站
 used_outs = {r.get('outbound') for r in rules if r.get('action') == 'route'} | {'direct'}
 outbounds = [o for o in outbounds if not o.get('tag', '').startswith('out-res') or o.get('tag') in used_outs]
 
@@ -1097,40 +1233,59 @@ cfg['route'] = {
     "default_domain_resolver": "dns-remote"
 }
 
-open(cfg_path, 'w').write(json.dumps(cfg, indent=2))
-os.chmod(cfg_path, 0o600)
+tmp_cfg = cfg_path + '.new'
+with open(tmp_cfg, 'w', encoding='utf-8') as f:
+    json.dump(cfg, f, indent=2)
+os.chmod(tmp_cfg, 0o600)
+os.replace(tmp_cfg, cfg_path)
 PYEOF
 chmod 700 /etc/sing-box && chmod 600 /etc/sing-box/config.json
 
-# 家宽白名单持久化
+# 家宽白名单持久化（Python ipaddress 校验 IPv4/IPv6 CIDR）
 if [ "$MODE" = "1" ] && [ "$SUBMODE" = "2" ] && [ -n "$RES_WHITELIST_IP" ]; then
     mkdir -p /etc/nftables.d
-    cat << EOF > /etc/nftables.d/sb-res-guard.nft
-table inet sb_res_guard
-delete table inet sb_res_guard
-table inet sb_res_guard {
-    set trusted_relays_v4 {
-        type ipv4_addr
-        flags interval
-        elements = { 127.0.0.0/8, ${RES_WHITELIST_IP} }
-    }
-    chain input {
-        type filter hook input priority filter; policy accept;
-        iifname "lo" accept
-        ct state established,related accept
-        tcp dport ${LISTEN_PORT} ip saddr @trusted_relays_v4 accept
-        udp dport ${LISTEN_PORT} ip saddr @trusted_relays_v4 accept
-        tcp dport ${LISTEN_PORT} drop
-        udp dport ${LISTEN_PORT} drop
-    }
-    chain output {
-        type filter hook output priority filter; policy accept;
-        tcp dport 25 reject with tcp reset
-    }
-}
-EOF
-    if nft -f /etc/nftables.d/sb-res-guard.nft; then
-        cat << 'EOF' > /etc/systemd/system/sb-res-guard.service
+    if LISTEN_PORT="$LISTEN_PORT" RES_WHITELIST_IP="$RES_WHITELIST_IP" python3 - << 'NFTPY'
+import os, re, ipaddress
+port = int(os.environ["LISTEN_PORT"])
+raw = os.environ.get("RES_WHITELIST_IP", "")
+tokens = [t.strip() for t in re.split(r"[,，\s]+", raw) if t.strip()]
+v4, v6 = ["127.0.0.0/8"], ["::1/128"]
+for t in tokens:
+    net = ipaddress.ip_network(t, strict=False)
+    if net.version == 4:
+        v4.append(str(net))
+    else:
+        v6.append(str(net))
+if len(v4) == 1 and len(v6) == 1:
+    raise SystemExit(1)
+lines = [
+    "table inet sb_res_guard",
+    "delete table inet sb_res_guard",
+    "table inet sb_res_guard {",
+    f"    set trusted_relays_v4 {{ type ipv4_addr; flags interval; elements = {{ {', '.join(v4)} }}; }}",
+    f"    set trusted_relays_v6 {{ type ipv6_addr; flags interval; elements = {{ {', '.join(v6)} }}; }}",
+    "    chain input {",
+    "        type filter hook input priority filter; policy accept;",
+    '        iifname "lo" accept',
+    "        ct state established,related accept",
+    f"        tcp dport {port} ip saddr @trusted_relays_v4 accept",
+    f"        udp dport {port} ip saddr @trusted_relays_v4 accept",
+    f"        tcp dport {port} ip6 saddr @trusted_relays_v6 accept",
+    f"        udp dport {port} ip6 saddr @trusted_relays_v6 accept",
+    f"        tcp dport {port} drop",
+    f"        udp dport {port} drop",
+    "    }",
+    "    chain output {",
+    "        type filter hook output priority filter; policy accept;",
+    "        tcp dport 25 reject with tcp reset",
+    "    }",
+    "}",
+]
+open("/etc/nftables.d/sb-res-guard.nft", "w", encoding="utf-8").write("\n".join(lines) + "\n")
+NFTPY
+    then
+        if nft -f /etc/nftables.d/sb-res-guard.nft; then
+            cat << 'EOF' > /etc/systemd/system/sb-res-guard.service
 [Unit]
 Description=sing-box Residential Landing Port Whitelist
 After=network-online.target
@@ -1145,24 +1300,30 @@ ExecStop=/usr/sbin/nft delete table inet sb_res_guard
 [Install]
 WantedBy=multi-user.target
 EOF
-        systemctl daemon-reload && systemctl enable sb-res-guard.service >/dev/null 2>&1 || true
-        echo "  [OK] 家宽端口 ${LISTEN_PORT} 白名单已生效并配置开机自启 (sb-res-guard.service)"
+            systemctl daemon-reload && systemctl enable sb-res-guard.service >/dev/null 2>&1 || true
+            echo "  [OK] 家宽端口 ${LISTEN_PORT} 白名单已生效并配置开机自启 (sb-res-guard.service)"
+        else
+            echo "  [警告] nftables 家宽白名单加载失败！请检查内核 nftables 支持！" >&2
+        fi
     else
-        echo "  [警告] nftables 家宽白名单加载失败！请检查白名单 IP (${RES_WHITELIST_IP}) 格式或内核 nftables 支持！" >&2
+        echo "  [警告] 白名单 IP (${RES_WHITELIST_IP}) 含非法地址，已跳过防火墙白名单以免断联！" >&2
     fi
 fi
 
-# 方案 3 端口跳跃
+# 方案 3 端口跳跃（覆盖前先停止旧服务，防止改端口残留旧 PREROUTING 规则）
 if [ "$MODE" = "3" ]; then
+    systemctl stop sb-hy2-hopping.service 2>/dev/null || true
     cat << EOF > /etc/systemd/system/sb-hy2-hopping.service
 [Unit]
 Description=sing-box Hysteria 2 Port Hopping (IPv4/IPv6 Idempotent)
 After=network.target
+
 [Service]
 Type=oneshot
 ExecStart=/bin/sh -c 'iptables -t nat -C PREROUTING -p udp -m addrtype --dst-type LOCAL --dport 20000:50000 -j REDIRECT --to-ports ${LISTEN_PORT} 2>/dev/null || iptables -t nat -A PREROUTING -p udp -m addrtype --dst-type LOCAL --dport 20000:50000 -j REDIRECT --to-ports ${LISTEN_PORT}; ip6tables -t nat -C PREROUTING -p udp -m addrtype --dst-type LOCAL --dport 20000:50000 -j REDIRECT --to-ports ${LISTEN_PORT} 2>/dev/null || ip6tables -t nat -A PREROUTING -p udp -m addrtype --dst-type LOCAL --dport 20000:50000 -j REDIRECT --to-ports ${LISTEN_PORT} 2>/dev/null || true'
 ExecStop=/bin/sh -c 'iptables -t nat -D PREROUTING -p udp -m addrtype --dst-type LOCAL --dport 20000:50000 -j REDIRECT --to-ports ${LISTEN_PORT} 2>/dev/null || true; ip6tables -t nat -D PREROUTING -p udp -m addrtype --dst-type LOCAL --dport 20000:50000 -j REDIRECT --to-ports ${LISTEN_PORT} 2>/dev/null || true'
 RemainAfterExit=yes
+
 [Install]
 WantedBy=multi-user.target
 EOF

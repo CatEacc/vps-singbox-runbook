@@ -12,9 +12,9 @@
 
 ---
 
-## 小白一键执行（四套方案交互菜单，单进程极低内存）
+## 小白一键执行（六大模式交互菜单，单进程极低内存）
 
-新机以 `root` 执行下方命令，按提示选 `1`～`4`（与 `vps-xray-runbook` 四方案完全对齐，**无面板常驻仅 ~20MB 内存**，启动前自动执行 `sing-box check` 强校验）：
+新机以 `root` 执行下方命令，按提示选 `1`～`6`（与 `vps-xray-runbook` 部署方案完全对齐，**无面板常驻仅 ~20MB 内存**，启动前自动执行 `sing-box check` 强校验）：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/CatEacc/vps-singbox-runbook/main/singbox.sh)

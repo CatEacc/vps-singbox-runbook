@@ -39,6 +39,10 @@
         "server": "dns-direct"
       },
       {
+        "query_type": ["HTTPS", "SVCB"],
+        "action": "reject"
+      },
+      {
         "query_type": ["A", "AAAA"],
         "server": "dns-fakeip"
       }
@@ -133,7 +137,7 @@
     {
       "type": "shadowsocks",
       "tag": "Residential-ISP-Landing",
-      "server": "12.34.56.78",
+      "server": "192.0.2.30",
       "server_port": 30001,
       "method": "2022-blake3-aes-256-gcm",
       "password": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
