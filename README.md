@@ -26,6 +26,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/CatEacc/vps-singbox-runbook/
 * **方案 2：`Cloudflare CDN 优选`**（`VLESS + WS + TLS`，默认 `2053` 可自选回源端口）
 * **方案 3：`Hysteria 2 + 20000-50000 端口跳跃`**（默认 `UDP 8443` 错开 `TCP 443`，**单进程原生直通后端家宽，无需本地 SOCKS5 桥接、省百兆内存**）
 * **方案 4：`纯系统底层内核调优模式`**（BBR + FQ、按内存分档网络缓冲区、1GB Swap、禁 MPTCP、Fail2ban、Journald 50M 收敛）
+* **只读实用工具**：支持 `[5]` 只读导出全部节点链接与 Hy2 公钥指纹、`[6]` **本机家宽 / 商宽 / 机房 IP 与环境快检**（直查 PTR 反解、官方 RDAP 归属、机房属性、Hyper-V 与出站 `TCP 25` 状态，不碰易误报的流媒体解锁）
 
 ---
 
