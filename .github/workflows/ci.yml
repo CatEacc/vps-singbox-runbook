@@ -37,6 +37,10 @@ jobs:
               print(f"  Block #{idx} ({tag}): syntax OK")
           PY
 
+      - name: Smoke-test read-only SNI check mode
+        run: |
+          sudo bash singbox.sh sni www.gentoo.org
+
       - name: Validate client.json with official sing-box v1.14.4
         run: |
           SB_VER="1.14.4"
