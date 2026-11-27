@@ -467,12 +467,61 @@ readonly_sni_menu() {
     exit 0
 }
 
+NODE_PREFIX=""
+CLIENT_COUNT="1"
+CLIENT_REMARKS=""
+RES_PROTO="ss"
+RES_USER=""
+
+prompt_multi_clients() {
+    local def_prefix="$1"
+    printf "\n  ${CYAN}─── 节点命名与同端口批量添加客户（直接回车默认单用户） ───${R}\n"
+    read -rp "$(printf "  ${YELLOW}请输入节点前缀名（如 att-vless-reality，回车默认 %s）: ${R}" "$def_prefix")" NODE_PREFIX
+    NODE_PREFIX=$(printf "%s" "${NODE_PREFIX:-$def_prefix}" | tr -d '\r\n' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')
+    [ -z "$NODE_PREFIX" ] && NODE_PREFIX="$def_prefix"
+
+    read -rp "$(printf "  ${YELLOW}本次在该端口添加几个客户？[1-50] (回车默认 1): ${R}")" CLIENT_COUNT
+    if [[ ! "${CLIENT_COUNT:-1}" =~ ^[0-9]+$ ]] || [ "${CLIENT_COUNT:-1}" -lt 1 ] || [ "${CLIENT_COUNT:-1}" -gt 50 ]; then
+        CLIENT_COUNT="1"
+    fi
+
+    if [ "$CLIENT_COUNT" -eq 1 ]; then
+        read -rp "$(printf "  ${YELLOW}请输入客户备注名（如 自用，留空回车自动生成随机 8 位英文名）: ${R}")" CLIENT_REMARKS
+    else
+        read -rp "$(printf "  ${YELLOW}请输入 %s 个客户备注名（英文逗号分隔，如 自用,朋友A；留空或不足自动补随机英文）: ${R}" "$CLIENT_COUNT")" CLIENT_REMARKS
+    fi
+    CLIENT_REMARKS=$(printf "%s" "${CLIENT_REMARKS:-}" | tr -d '\r\n')
+}
+
 prompt_relay_target() {
-    printf "\n  ${CYAN}─── 后端家宽中转对接方式 ───${R}\n"
-    printf "  ${GREEN}[1]${R} ${WHITE}粘贴 ss:// 分享链接${R} ${DIM}(自动解析 IP/端口/密钥，也支持直接输入 IP 手填)${R}\n"
+    RES_PROTO="ss"
+    RES_USER=""
+    printf "\n  ${CYAN}─── 后端家宽 / 住宅代理中转对接方式 ───${R}\n"
+    printf "  ${GREEN}[1]${R} ${WHITE}粘贴自建家宽 ss:// 分享链接${R} ${DIM}(自动解析 IP/端口/密钥，也支持直接输入 IP 手填)${R}\n"
     printf "  ${GREEN}[2]${R} ${WHITE}全自动远程部署家宽机并对接${R} ${PINK}★ 终极懒人版 · 填 SSH 账密自动装好并拉回凭据${R}\n"
-    read -rp "$(printf "  ${YELLOW}请选择对接方式 [1-2] (回车默认 1): ${R}")" RELAY_MODE
+    printf "  ${GREEN}[3]${R} ${WHITE}绑定第三方静态住宅代理（SOCKS5 / HTTP）${R} ${CYAN}· 填 IP:端口:账号:密码 · 支持同端口按客户独立分流${R}\n"
+    read -rp "$(printf "  ${YELLOW}请选择对接方式 [1-3] (回车默认 1): ${R}")" RELAY_MODE
     RELAY_MODE="${RELAY_MODE:-1}"
+
+    if [ "$RELAY_MODE" = "3" ]; then
+        printf "  ${GREEN}[1]${R} SOCKS5  ${GREEN}[2]${R} HTTP\n"
+        read -rp "$(printf "  ${SKY}-> 请选择住宅代理协议 [1-2] (回车默认 1 SOCKS5): ${R}")" PROXY_TYPE_PICK
+        [ "${PROXY_TYPE_PICK:-1}" = "2" ] && RES_PROTO="http" || RES_PROTO="socks"
+        read -rp "$(printf "  ${SKY}-> 请输入住宅代理 IP 或域名: ${R}")" RES_IP
+        RES_IP=$(printf "%s" "$RES_IP" | tr -d '[:space:]')
+        read -rp "$(printf "  ${SKY}-> 请输入住宅代理端口: ${R}")" RES_PORT
+        RES_PORT=$(validate_port "${RES_PORT:-1080}" 1080)
+        read -rp "$(printf "  ${SKY}-> 请输入住宅代理用户名（无认证直接回车）: ${R}")" RES_USER
+        RES_USER=$(printf "%s" "$RES_USER" | tr -d '\r\n')
+        if [ -n "$RES_USER" ]; then
+            read -rp "$(printf "  ${SKY}-> 请输入住宅代理密码: ${R}")" RES_SS_PASS
+            RES_SS_PASS=$(printf "%s" "$RES_SS_PASS" | tr -d '\r\n')
+        else
+            RES_SS_PASS=""
+        fi
+        printf "  ${GREEN}-> [已配置]${R} 第三方住宅出站: ${CYAN}%s://%s:%s${R}\n" "$RES_PROTO" "$RES_IP" "$RES_PORT"
+        return 0
+    fi
 
     if [ "$RELAY_MODE" = "2" ]; then
         read -rp "$(printf "  ${SKY}-> 后端家宽机 SSH IP: ${R}")" RES_SSH_IP
@@ -618,7 +667,8 @@ case "$MODE" in
                     ;;
                 *) REALITY_SNI="addons.mozilla.org" ;;
             esac
-            read -rp "$(printf "  ${YELLOW}是否一键中转到后端海外家宽机？[y/N]: ${R}")" ENABLE_RELAY
+            prompt_multi_clients "SB-VLESS-REALITY"
+            read -rp "$(printf "  ${YELLOW}是否给这批新客户绑定后端家宽 / 住宅代理落地？[y/N]: ${R}")" ENABLE_RELAY
             ENABLE_RELAY="${ENABLE_RELAY:-n}"
             if [[ "$ENABLE_RELAY" =~ ^[Yy]$ ]]; then
                 prompt_relay_target
@@ -668,13 +718,20 @@ case "$MODE" in
             *) CF_OPT_HOST="www.visa.com.hk" ;;
         esac
         printf "  ${GREEN}-> 已选定 CF 优选入口:${R} ${WHITE}%s${R} ${DIM}(Host/SNI 保持 %s 不变)${R}\n" "$CF_OPT_HOST" "$CF_DOMAIN"
+        prompt_multi_clients "SB-CF-WS"
+        read -rp "$(printf "  ${YELLOW}是否给这批新客户绑定后端家宽 / 住宅代理落地？[y/N]: ${R}")" ENABLE_RELAY
+        ENABLE_RELAY="${ENABLE_RELAY:-n}"
+        if [[ "$ENABLE_RELAY" =~ ^[Yy]$ ]]; then
+            prompt_relay_target
+        fi
         ;;
     3)
         read -rp "$(printf "  ${YELLOW}请输入 Hysteria 2 本地 UDP 监听端口 (回车默认 8443 错开 TCP 443，也可填 443): ${R}")" LISTEN_PORT
         LISTEN_PORT=$(validate_port "${LISTEN_PORT:-8443}" 8443)
         read -rp "$(printf "  ${YELLOW}是否为廉价高丢包线路开启 Brutal？(CN2/9929 精品线强烈选 n) [y/N]: ${R}")" HY2_BRUTAL
         HY2_BRUTAL="${HY2_BRUTAL:-n}"
-        read -rp "$(printf "  ${YELLOW}是否一键中转到后端海外家宽机？[y/N]: ${R}")" ENABLE_RELAY
+        prompt_multi_clients "SB-Hy2"
+        read -rp "$(printf "  ${YELLOW}是否给这批新客户绑定后端家宽 / 住宅代理落地？[y/N]: ${R}")" ENABLE_RELAY
         ENABLE_RELAY="${ENABLE_RELAY:-n}"
         if [[ "$ENABLE_RELAY" =~ ^[Yy]$ ]]; then
             prompt_relay_target
@@ -1151,9 +1208,10 @@ echo "[4/4] 生成 sing-box v${SB_VERSION} 零弃用配置并启动服务..."
 install -m 600 /dev/null /tmp/sb_result.txt
 MODE="$MODE" SUBMODE="$SUBMODE" LISTEN_PORT="$LISTEN_PORT" REALITY_SNI="$REALITY_SNI" \
 CF_DOMAIN="$CF_DOMAIN" HY2_BRUTAL="$HY2_BRUTAL" SERVER_IP="$SERVER_IP" \
-ENABLE_RELAY="$ENABLE_RELAY" RES_IP="$RES_IP" RES_PORT="$RES_PORT" RES_SS_PASS="$RES_SS_PASS" \
+ENABLE_RELAY="$ENABLE_RELAY" RES_PROTO="${RES_PROTO:-ss}" RES_IP="$RES_IP" RES_PORT="$RES_PORT" RES_USER="${RES_USER:-}" RES_SS_PASS="$RES_SS_PASS" \
+NODE_PREFIX="${NODE_PREFIX:-}" CLIENT_COUNT="${CLIENT_COUNT:-1}" CLIENT_REMARKS="${CLIENT_REMARKS:-}" \
 python3 - << 'PYEOF' > /tmp/sb_result.txt
-import json, os, uuid, secrets, subprocess, base64, hashlib
+import json, os, uuid, secrets, subprocess, base64, hashlib, urllib.parse, re
 os.umask(0o077)
 
 mode = os.environ['MODE']
@@ -1164,11 +1222,20 @@ cf_domain = os.environ['CF_DOMAIN']
 hy2_brutal = os.environ['HY2_BRUTAL'].lower() == 'y'
 server_ip = os.environ['SERVER_IP']
 enable_relay = os.environ['ENABLE_RELAY'].lower() == 'y'
+res_proto = (os.environ.get('RES_PROTO') or 'ss').strip().lower()
 res_ip = os.environ['RES_IP'].strip()
 res_port = os.environ['RES_PORT'].strip()
+res_user = os.environ.get('RES_USER', '').strip()
 res_ss_pass = os.environ['RES_SS_PASS'].strip()
+node_prefix = os.environ.get('NODE_PREFIX', '').strip()
+try:
+    client_count = max(1, min(50, int(os.environ.get('CLIENT_COUNT', '1') or '1')))
+except Exception:
+    client_count = 1
+client_remarks_raw = os.environ.get('CLIENT_REMARKS', '').strip()
 
 cfg_path = '/etc/sing-box/config.json'
+meta_path = '/etc/sing-box/.meta.json'
 if os.path.exists(cfg_path):
     try:
         cfg = json.load(open(cfg_path, encoding='utf-8'))
@@ -1176,6 +1243,7 @@ if os.path.exists(cfg_path):
         cfg = {}
 else:
     cfg = {}
+meta = json.load(open(meta_path, encoding='utf-8')) if os.path.exists(meta_path) else {}
 
 cfg['log'] = {"level": "warn", "timestamp": True}
 cfg['http_clients'] = [{"tag": "direct-http", "detour": "direct"}]
@@ -1203,24 +1271,81 @@ def is_same_socket(existing, target_port, target_proto):
         return False
     return True
 
-removed_tags = {i.get('tag') for i in cfg.get('inbounds', []) if (i.get('tag') == inb_tag or is_same_socket(i, port, proto_key)) and i.get('tag')}
-inbounds = [i for i in cfg.get('inbounds', []) if i.get('tag') != inb_tag and not is_same_socket(i, port, proto_key)]
-relay_tag = f"out-res-{inb_tag}"
-stale_out_tags = {'direct', relay_tag} | {f"out-res-{t}" for t in removed_tags}
+def rand_suf(n=8):
+    return ''.join(secrets.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(n))
+
+def make_names(prefix, existing_names):
+    parts = [p.strip() for p in re.split(r'[,，]+', client_remarks_raw) if p.strip()] if client_remarks_raw else []
+    out = []
+    used = set(existing_names)
+    for i in range(client_count):
+        suf = parts[i] if i < len(parts) else rand_suf(8)
+        nm = f"{prefix}-{suf}" if prefix else suf
+        while nm in used:
+            nm = f"{nm}-{rand_suf(4)}"
+        used.add(nm)
+        out.append(nm)
+    return out
+
+existing_same = [i for i in cfg.get('inbounds', []) if i.get('tag') == inb_tag or is_same_socket(i, port, proto_key)]
+reused_inb = None
+if existing_same and not (mode == '1' and submode == '2'):
+    cand = existing_same[0]
+    if mode == '1' and cand.get('type') == 'vless' and cand.get('tls', {}).get('reality', {}).get('enabled'):
+        reused_inb = cand
+    elif mode == '2' and cand.get('type') == 'vless' and cand.get('transport', {}).get('type') == 'ws':
+        reused_inb = cand
+    elif mode == '3' and cand.get('type') == 'hysteria2':
+        reused_inb = cand
+
+if reused_inb is None:
+    removed_tags = {i.get('tag') for i in existing_same if i.get('tag')}
+    inbounds = [i for i in cfg.get('inbounds', []) if i.get('tag') != inb_tag and not is_same_socket(i, port, proto_key)]
+else:
+    removed_tags = set()
+    inb_tag = reused_inb['tag']
+    inbounds = list(cfg.get('inbounds', []))
+
+relay_valid = enable_relay and res_ip and res_port and (res_proto in ('socks', 'http') or res_ss_pass)
+relay_per_user = False
+if relay_valid and reused_inb is not None:
+    relay_tag = f"out-res-u-{port}-{secrets.token_hex(2)}"
+    relay_per_user = True
+else:
+    relay_tag = f"out-res-{inb_tag}"
+
+stale_out_tags = {'direct'} | ({relay_tag} | {f"out-res-{t}" for t in removed_tags} if reused_inb is None else set())
 outbounds = [o for o in cfg.get('outbounds', []) if o.get('tag') not in stale_out_tags]
 outbounds.insert(0, {"type": "direct", "tag": "direct"})
 
-if enable_relay and res_ip and res_port and res_ss_pass:
-    outbounds.append({
-        "type": "shadowsocks",
-        "tag": relay_tag,
-        "server": res_ip,
-        "server_port": int(res_port),
-        "method": "2022-blake3-aes-256-gcm",
-        "password": res_ss_pass
-    })
+if relay_valid:
+    if res_proto == 'socks':
+        ob = {"type": "socks", "tag": relay_tag, "server": res_ip, "server_port": int(res_port), "version": "5"}
+        if res_user:
+            ob["username"] = res_user
+            ob["password"] = res_ss_pass
+        outbounds.append(ob)
+    elif res_proto == 'http':
+        ob = {"type": "http", "tag": relay_tag, "server": res_ip, "server_port": int(res_port)}
+        if res_user:
+            ob["username"] = res_user
+            ob["password"] = res_ss_pass
+        outbounds.append(ob)
+    else:
+        outbounds.append({
+            "type": "shadowsocks",
+            "tag": relay_tag,
+            "server": res_ip,
+            "server_port": int(res_port),
+            "method": "2022-blake3-aes-256-gcm",
+            "password": res_ss_pass
+        })
 else:
     relay_tag = None
+
+new_user_names = []
+share_items = []
+uri_ip = f"[{server_ip}]" if ":" in server_ip and not server_ip.startswith("[") else server_ip
 
 if mode == '1' and submode == '2':
     ss_pass = base64.b64encode(os.urandom(32)).decode()
@@ -1238,99 +1363,151 @@ if mode == '1' and submode == '2':
     print(f"SS_PASS={ss_pass}")
 
 elif mode == '1':
-    kp = subprocess.check_output(['/usr/local/bin/sing-box', 'generate', 'reality-keypair'], text=True)
-    priv = pub = ''
-    for line in kp.splitlines():
-        if 'PrivateKey' in line: priv = line.split(':', 1)[1].strip()
-        elif 'PublicKey' in line: pub = line.split(':', 1)[1].strip()
-    sid = secrets.token_hex(4)
-    u = str(uuid.uuid4())
-    inbounds.append({
-        "type": "vless",
-        "tag": inb_tag,
-        "listen": "::",
-        "listen_port": port,
-        "users": [{"uuid": u, "flow": "xtls-rprx-vision"}],
-        "tls": {
-            "enabled": True,
-            "server_name": sni,
-            "reality": {
+    pre = node_prefix or "SB-VLESS-REALITY"
+    if reused_inb is not None:
+        ex_names = {u.get('name', '') for u in reused_inb.get('users', [])}
+        new_user_names = make_names(pre, ex_names)
+        new_users = [{"name": nm, "uuid": str(uuid.uuid4()), "flow": "xtls-rprx-vision"} for nm in new_user_names]
+        reused_inb.setdefault('users', []).extend(new_users)
+        rs = reused_inb.get('tls', {}).get('reality', {})
+        sni = reused_inb.get('tls', {}).get('server_name', sni)
+        sid = (rs.get('short_id') or [''])[0]
+        pub = meta.get(inb_tag, {}).get('pbk', '')
+        print("REUSED_EXISTING=1")
+    else:
+        kp = subprocess.check_output(['/usr/local/bin/sing-box', 'generate', 'reality-keypair'], text=True)
+        priv = pub = ''
+        for line in kp.splitlines():
+            if 'PrivateKey' in line: priv = line.split(':', 1)[1].strip()
+            elif 'PublicKey' in line: pub = line.split(':', 1)[1].strip()
+        sid = secrets.token_hex(4)
+        new_user_names = make_names(pre, set())
+        new_users = [{"name": nm, "uuid": str(uuid.uuid4()), "flow": "xtls-rprx-vision"} for nm in new_user_names]
+        inbounds.append({
+            "type": "vless",
+            "tag": inb_tag,
+            "listen": "::",
+            "listen_port": port,
+            "users": new_users,
+            "tls": {
                 "enabled": True,
-                "handshake": {"server": sni, "server_port": 443},
-                "private_key": priv,
-                "short_id": [sid]
+                "server_name": sni,
+                "reality": {
+                    "enabled": True,
+                    "handshake": {"server": sni, "server_port": 443},
+                    "private_key": priv,
+                    "short_id": [sid]
+                }
             }
-        }
-    })
-    uri_ip = f"[{server_ip}]" if ":" in server_ip and not server_ip.startswith("[") else server_ip
+        })
+        meta[inb_tag] = {"pbk": pub}
     print("RESULT_TYPE=LINK")
-    print(f"SHARE_LINK=vless://{u}@{uri_ip}:{port}?type=tcp&security=reality&pbk={pub}&fp=chrome&sni={sni}&sid={sid}&flow=xtls-rprx-vision#CatEacc-SB-REALITY")
+    for uo in new_users:
+        lnk = f"vless://{uo['uuid']}@{uri_ip}:{port}?type=tcp&security=reality&pbk={pub}&fp=chrome&sni={sni}&sid={sid}&flow=xtls-rprx-vision#{urllib.parse.quote(uo['name'])}"
+        share_items.append((uo['name'], lnk))
 
 elif mode == '2':
-    u = str(uuid.uuid4())
-    inbounds.append({
-        "type": "vless",
-        "tag": inb_tag,
-        "listen": "::",
-        "listen_port": port,
-        "users": [{"uuid": u}],
-        "tls": {
-            "enabled": True,
-            "server_name": cf_domain,
-            "alpn": ["http/1.1"],
-            "certificate_path": "/etc/sing-box/cf.crt",
-            "key_path": "/etc/sing-box/cf.key"
-        },
-        "transport": {
-            "type": "ws",
-            "path": "/vless-ws",
-            "headers": {"Host": cf_domain}
-        }
-    })
+    pre = node_prefix or "SB-CF-WS"
+    if reused_inb is not None:
+        ex_names = {u.get('name', '') for u in reused_inb.get('users', [])}
+        new_user_names = make_names(pre, ex_names)
+        new_users = [{"name": nm, "uuid": str(uuid.uuid4())} for nm in new_user_names]
+        reused_inb.setdefault('users', []).extend(new_users)
+        cf_domain = reused_inb.get('tls', {}).get('server_name', cf_domain)
+        print("REUSED_EXISTING=1")
+    else:
+        new_user_names = make_names(pre, set())
+        new_users = [{"name": nm, "uuid": str(uuid.uuid4())} for nm in new_user_names]
+        inbounds.append({
+            "type": "vless",
+            "tag": inb_tag,
+            "listen": "::",
+            "listen_port": port,
+            "users": new_users,
+            "tls": {
+                "enabled": True,
+                "server_name": cf_domain,
+                "alpn": ["http/1.1"],
+                "certificate_path": "/etc/sing-box/cf.crt",
+                "key_path": "/etc/sing-box/cf.key"
+            },
+            "transport": {
+                "type": "ws",
+                "path": "/vless-ws",
+                "headers": {"Host": cf_domain}
+            }
+        })
     print("RESULT_TYPE=LINK")
-    print(f"SHARE_LINK=vless://{u}@{cf_domain}:{port}?type=ws&security=tls&path=%2Fvless-ws&host={cf_domain}&sni={cf_domain}&alpn=http%2F1.1&fp=chrome#CatEacc-SB-CF-WS")
+    for uo in new_users:
+        lnk = f"vless://{uo['uuid']}@{cf_domain}:{port}?type=ws&security=tls&path=%2Fvless-ws&host={cf_domain}&sni={cf_domain}&alpn=http%2F1.1&fp=chrome#{urllib.parse.quote(uo['name'])}"
+        share_items.append((uo['name'], lnk))
 
 elif mode == '3':
-    hy2_pass = ''.join(secrets.choice('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(16))
+    pre = node_prefix or "SB-Hy2"
     fp = subprocess.check_output(['openssl', 'x509', '-in', '/etc/sing-box/server.crt', '-noout', '-sha256', '-fingerprint'], text=True).split('=', 1)[1].strip()
     pub_pem = subprocess.check_output(['openssl', 'x509', '-in', '/etc/sing-box/server.crt', '-pubkey', '-noout'])
     pub_der = subprocess.check_output(['openssl', 'pkey', '-pubin', '-outform', 'der'], input=pub_pem)
     spki = base64.b64encode(hashlib.sha256(pub_der).digest()).decode()
-    hy2_inb = {
-        "type": "hysteria2",
-        "tag": inb_tag,
-        "listen": "::",
-        "listen_port": port,
-        "users": [{"password": hy2_pass}],
-        "ignore_client_bandwidth": (not hy2_brutal),
-        "tls": {
-            "enabled": True,
-            "certificate_path": "/etc/sing-box/server.crt",
-            "key_path": "/etc/sing-box/server.key"
-        },
-        "masquerade": "https://www.bing.com/"
-    }
-    if hy2_brutal:
-        hy2_inb["up_mbps"] = 500
-        hy2_inb["down_mbps"] = 100
-    inbounds.append(hy2_inb)
-    uri_ip = f"[{server_ip}]" if ":" in server_ip and not server_ip.startswith("[") else server_ip
+    if reused_inb is not None:
+        ex_names = {u.get('name', '') for u in reused_inb.get('users', [])}
+        new_user_names = make_names(pre, ex_names)
+        new_users = [{"name": nm, "password": ''.join(secrets.choice('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(16))} for nm in new_user_names]
+        reused_inb.setdefault('users', []).extend(new_users)
+        print("REUSED_EXISTING=1")
+    else:
+        new_user_names = make_names(pre, set())
+        new_users = [{"name": nm, "password": ''.join(secrets.choice('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(16))} for nm in new_user_names]
+        hy2_inb = {
+            "type": "hysteria2",
+            "tag": inb_tag,
+            "listen": "::",
+            "listen_port": port,
+            "users": new_users,
+            "ignore_client_bandwidth": (not hy2_brutal),
+            "tls": {
+                "enabled": True,
+                "certificate_path": "/etc/sing-box/server.crt",
+                "key_path": "/etc/sing-box/server.key"
+            },
+            "masquerade": "https://www.bing.com/"
+        }
+        if hy2_brutal:
+            hy2_inb["up_mbps"] = 500
+            hy2_inb["down_mbps"] = 100
+        inbounds.append(hy2_inb)
     print("RESULT_TYPE=LINK")
-    print(f"SHARE_LINK=hysteria2://{hy2_pass}@{uri_ip}:{port}?insecure=1&sni=www.bing.com&pinSHA256={fp}&mport=20000-50000#CatEacc-SB-Hy2")
+    for uo in new_users:
+        lnk = f"hysteria2://{uo['password']}@{uri_ip}:{port}?insecure=1&sni=www.bing.com&pinSHA256={fp}&mport=20000-50000#{urllib.parse.quote(uo['name'])}"
+        share_items.append((uo['name'], lnk))
     print(f"SPKI_SHA256={spki}")
+
+for _nm, _lnk in share_items:
+    print(f"SHARE_LINK_ITEM={_nm}|{_lnk}")
+if len(share_items) == 1:
+    print(f"SHARE_LINK={share_items[0][1]}")
+with open(meta_path, 'w', encoding='utf-8') as mf:
+    json.dump(meta, mf, indent=2, ensure_ascii=False)
+os.chmod(meta_path, 0o600)
 
 relay_rules = []
 active_inb_tags = {i.get('tag') for i in inbounds if i.get('tag')}
 active_out_tags = {o.get('tag') for o in outbounds if o.get('tag')}
 for r in cfg.get('route', {}).get('rules', []):
-    inb_val = r.get('inbound')
-    inb_list = [inb_val] if isinstance(inb_val, str) else (inb_val if isinstance(inb_val, list) else None)
-    if r.get('action') == 'route' and inb_list and r.get('outbound') in active_out_tags and str(r.get('outbound', '')).startswith('out-res-'):
-        kept = [t for t in inb_list if t != inb_tag and t not in removed_tags and t in active_inb_tags]
-        if kept:
-            relay_rules.append({"inbound": kept, "action": "route", "outbound": r['outbound']})
+    if r.get('action') == 'route' and r.get('outbound') in active_out_tags and str(r.get('outbound', '')).startswith('out-res-'):
+        if r.get('auth_user'):
+            relay_rules.append(r)
+            continue
+        inb_val = r.get('inbound')
+        inb_list = [inb_val] if isinstance(inb_val, str) else (inb_val if isinstance(inb_val, list) else None)
+        if inb_list:
+            kept = [t for t in inb_list if (reused_inb is not None or t != inb_tag) and t not in removed_tags and t in active_inb_tags]
+            if kept:
+                relay_rules.append({"inbound": kept, "action": "route", "outbound": r['outbound']})
 if relay_tag:
-    relay_rules.append({"inbound": [inb_tag], "action": "route", "outbound": relay_tag})
+    if relay_per_user and new_user_names:
+        relay_rules.insert(0, {"auth_user": new_user_names, "action": "route", "outbound": relay_tag})
+    else:
+        relay_rules.append({"inbound": [inb_tag], "action": "route", "outbound": relay_tag})
 
 relayed_inb_set = {t for rr in relay_rules for t in rr.get('inbound', [])}
 has_direct_inb = bool(active_inb_tags - relayed_inb_set)
@@ -1521,20 +1698,37 @@ if [ -f /tmp/sb_result.txt ]; then
         printf "  ${YELLOW}【家宽落地 SS-2022 中转凭据】（请复制到前置优化机脚本中）：${R}\n"
         grep -E "^SS_(IP|PORT|PASS)=" /tmp/sb_result.txt | sed 's/^/  /'
     elif grep -q "RESULT_TYPE=LINK" /tmp/sb_result.txt; then
-        printf "  ${GREEN}【客户端导入链接】${R}${DIM}（请先关掉客户端顶部总开关再测速！）：${R}\n"
-        SB_URL=$(grep "^SHARE_LINK=" /tmp/sb_result.txt | cut -d'=' -f2- || true)
-        printf "  ${WHITE}%s${R}\n" "${SB_URL}"
-        if command -v qrencode >/dev/null 2>&1 && [ -n "$SB_URL" ]; then
-            printf "  ${CYAN}【手机扫码导入（Shadowrocket / v2rayNG / Stash）】：${R}\n"
-            qrencode -t ANSIUTF8 -m 1 "$SB_URL" || true
-        fi
-        if [ "$MODE" = "2" ] && [ -n "$SB_URL" ]; then
-            CF_OPT_URL="$(printf '%s' "$SB_URL" | sed -E "s|@[^:]+:|@${CF_OPT_HOST}:|")-CF%E4%BC%98%E9%80%89"
-            printf "\n  ${YELLOW}【CF 优选加速链接（入口: %s，防国内默认免费段超时，直接扫这个更快更稳）】：${R}\n" "${CF_OPT_HOST}"
-            printf "  ${GREEN}%s${R}\n" "${CF_OPT_URL}"
-            if command -v qrencode >/dev/null 2>&1; then
-                qrencode -t ANSIUTF8 -m 1 "$CF_OPT_URL" || true
+        SB_CNT=$(grep -c "^SHARE_LINK_ITEM=" /tmp/sb_result.txt 2>/dev/null || echo 0)
+        if [ "$SB_CNT" -le 1 ]; then
+            printf "  ${GREEN}【客户端导入链接】${R}${DIM}（请先关掉客户端顶部总开关再测速！）：${R}\n"
+            SB_URL=$(grep "^SHARE_LINK=" /tmp/sb_result.txt | cut -d'=' -f2- || true)
+            [ -z "$SB_URL" ] && SB_URL=$(grep "^SHARE_LINK_ITEM=" /tmp/sb_result.txt | head -n 1 | cut -d'|' -f2- || true)
+            printf "  ${WHITE}%s${R}\n" "${SB_URL}"
+            if command -v qrencode >/dev/null 2>&1 && [ -n "$SB_URL" ]; then
+                printf "  ${CYAN}【手机扫码导入（Shadowrocket / v2rayNG / Stash）】：${R}\n"
+                qrencode -t ANSIUTF8 -m 1 "$SB_URL" || true
             fi
+            if [ "$MODE" = "2" ] && [ -n "$SB_URL" ]; then
+                CF_OPT_URL="$(printf '%s' "$SB_URL" | sed -E "s|@[^:]+:|@${CF_OPT_HOST}:|")-CF%E4%BC%98%E9%80%89"
+                printf "\n  ${YELLOW}【CF 优选加速链接（入口: %s，防国内默认免费段超时，直接扫这个更快更稳）】：${R}\n" "${CF_OPT_HOST}"
+                printf "  ${GREEN}%s${R}\n" "${CF_OPT_URL}"
+                if command -v qrencode >/dev/null 2>&1; then
+                    qrencode -t ANSIUTF8 -m 1 "$CF_OPT_URL" || true
+                fi
+            fi
+        else
+            printf "  ${GREEN}【本次批量生成 %s 个客户链接】${R}${DIM}（已自动追加至端口 %s，不覆盖原客户）：${R}\n" "${SB_CNT}" "${LISTEN_PORT}"
+            IDX_S=0
+            while IFS='|' read -r _sn _su; do
+                _sn="${_sn#SHARE_LINK_ITEM=}"
+                [ -z "$_su" ] && continue
+                IDX_S=$((IDX_S + 1))
+                printf "  ${CYAN}[%d] %s${R}\n  ${WHITE}%s${R}\n" "$IDX_S" "$_sn" "$_su"
+                if [ "$MODE" = "2" ]; then
+                    _sopt="$(printf '%s' "$_su" | sed -E "s|@[^:]+:|@${CF_OPT_HOST}:|")-CF%E4%BC%98%E9%80%89"
+                    printf "  ${GREEN}[%d-CF优选] %s${R}\n" "$IDX_S" "$_sopt"
+                fi
+            done < <(grep "^SHARE_LINK_ITEM=" /tmp/sb_result.txt)
         fi
         if grep -q "^SPKI_SHA256=" /tmp/sb_result.txt; then
             printf "  ${YELLOW}【sing-box client.json 证书锁定 (certificate_public_key_sha256)】：${R}\n"
