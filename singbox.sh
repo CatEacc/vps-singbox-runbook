@@ -707,6 +707,9 @@ else:
                 link = f"vless://{u}@{host}:{port}?type=ws&security=tls&path={path}&host={host}&sni={host}&alpn=http%2F1.1&fp=chrome#{urllib.parse.quote(tag)}"
                 print(f"  [{tag}] {link}")
                 print_qr(link)
+                if port in (443, 2053, 2083, 2087, 2096, 8443) and host and host != server_ip:
+                    opt_link = link.replace(f"@{host}:{port}?", f"@www.visa.com.hk:{port}?", 1) + "-CF%E4%BC%98%E9%80%89"
+                    print(f"  [{tag}-CF优选] {opt_link}")
                 found += 1
         elif t == 'hysteria2':
             pwd = urllib.parse.quote((inb.get('users') or [{}])[0].get('password', ''), safe='')
@@ -1487,12 +1490,20 @@ if [ -f /tmp/sb_result.txt ]; then
         printf "  ${YELLOW}【家宽落地 SS-2022 中转凭据】（请复制到前置优化机脚本中）：${R}\n"
         grep -E "^SS_(IP|PORT|PASS)=" /tmp/sb_result.txt | sed 's/^/  /'
     elif grep -q "RESULT_TYPE=LINK" /tmp/sb_result.txt; then
-        printf "  ${YELLOW}【客户端导入链接】：${R}\n"
+        printf "  ${GREEN}【客户端导入链接】${R}${DIM}（请先关掉客户端顶部总开关再测速！）：${R}\n"
         SB_URL=$(grep "^SHARE_LINK=" /tmp/sb_result.txt | cut -d'=' -f2- || true)
-        echo "  ${SB_URL}"
+        printf "  ${WHITE}%s${R}\n" "${SB_URL}"
         if command -v qrencode >/dev/null 2>&1 && [ -n "$SB_URL" ]; then
-            printf "  ${YELLOW}【手机扫码导入（Shadowrocket / v2rayNG / Stash）】：${R}\n"
+            printf "  ${CYAN}【手机扫码导入（Shadowrocket / v2rayNG / Stash）】：${R}\n"
             qrencode -t ANSIUTF8 -m 1 "$SB_URL" || true
+        fi
+        if [ "$MODE" = "2" ] && [ -n "$SB_URL" ]; then
+            CF_OPT_URL="$(printf '%s' "$SB_URL" | sed -E 's/@[^:]+:/@www.visa.com.hk:/')-CF%E4%BC%98%E9%80%89"
+            printf "\n  ${YELLOW}【CF 优选加速链接（防国内默认免费段超时，直接扫这个更快更稳）】：${R}\n"
+            printf "  ${GREEN}%s${R}\n" "${CF_OPT_URL}"
+            if command -v qrencode >/dev/null 2>&1; then
+                qrencode -t ANSIUTF8 -m 1 "$CF_OPT_URL" || true
+            fi
         fi
         if grep -q "^SPKI_SHA256=" /tmp/sb_result.txt; then
             printf "  ${YELLOW}【sing-box client.json 证书锁定 (certificate_public_key_sha256)】：${R}\n"
