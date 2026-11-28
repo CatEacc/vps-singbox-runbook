@@ -1,13 +1,32 @@
-# 生产级 sing-box 部署与调优实战手册（sing-box v1.14.4 零弃用语法）
+<div align="center">
 
-[![sing-box](https://img.shields.io/badge/sing--box-v1.14.4-blue)](https://github.com/SagerNet/sing-box/releases)
-[![Zero Panel](https://img.shields.io/badge/Memory-~20MB%20Single%20Binary-green)](#)
+<img src="singbox_banner.svg" alt="CatEacc vps-singbox-runbook Banner" width="100%" />
+
+<br />
+
+[![Release](https://img.shields.io/github/v/release/CatEacc/vps-singbox-runbook?style=flat-square&color=6366f1&label=Release)](https://github.com/CatEacc/vps-singbox-runbook/releases)
+[![Stars](https://img.shields.io/github/stars/CatEacc/vps-singbox-runbook?style=flat-square&color=38bdf8&label=Stars)](https://github.com/CatEacc/vps-singbox-runbook/stargazers)
+[![sing-box](https://img.shields.io/badge/sing--box-v1.14.4-6366f1?style=flat-square)](https://github.com/SagerNet/sing-box/releases)
+[![Memory](https://img.shields.io/badge/Memory-~20MB%20Single%20Binary-10b981?style=flat-square)](#)
 [![CI Check](https://github.com/CatEacc/vps-singbox-runbook/actions/workflows/ci.yml/badge.svg)](https://github.com/CatEacc/vps-singbox-runbook/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Telegram](https://img.shields.io/badge/Telegram-%E7%8C%ABe%2Facc-26A5E4?logo=telegram)](https://t.me/CatCryptoMaster)
+[![License: MIT](https://img.shields.io/badge/License-MIT-f59e0b?style=flat-square)](LICENSE)
+[![Telegram](https://img.shields.io/badge/Telegram-%E7%8C%ABe%2Facc-26A5E4?style=flat-square&logo=telegram&logoColor=white)](https://t.me/CatCryptoMaster)
 
-> **仓库地址**：`github.com/CatEacc/vps-singbox-runbook`  
-> **系列矩阵**：[vps-xray-runbook](https://github.com/CatEacc/vps-xray-runbook)（Xray + 3x-ui 面板版） · [vps-clash-runbook](https://github.com/CatEacc/vps-clash-runbook)（Mihomo 客户端版） · **vps-singbox-runbook**（sing-box 无面板单内核全栈版）
+<p>
+  <a href="#小白一键执行七大模式交互菜单单进程极低内存"><b>一键脚本</b></a> ·
+  <a href="#一为什么单独做-sing-box-v1144-零弃用版"><b>v1.14 零弃用语法</b></a> ·
+  <a href="#二客户端开箱即用模板clientjson"><b>客户端模板</b></a> ·
+  <a href="https://github.com/CatEacc/vps-xray-runbook">Xray 面板/纯内核版</a> ·
+  <a href="https://github.com/CatEacc/vps-clash-runbook">Clash 客户端</a> ·
+  <a href="https://github.com/CatEacc/vps-linux-tuning">Linux 内核调优</a>
+</p>
+
+<sub><b>sing-box v1.14.4 零弃用语法无面板单内核全栈脚本</b> — 常驻仅 ~20MB 内存，原生支持同端口 1-50 多客户、第三方 SOCKS5/HTTP 住宅代理按 <code>auth_user</code> 分流、9 大地区非 CF SNI 四重体检、CF 实测优选、Hy2 原生直通家宽（<code>pinSHA256</code> + SPKI 防 MITM）与 Clash/Mihomo YAML 一键导出</sub>
+
+</div>
+
+> - **零弃用零警告承诺**：所有服务端与客户端 JSON 均通过官方 `sing-box v1.14.4 check -c` CI 强校验，无面板、无 Docker 冗余开销，启动即稳。
+> - **纯开源可审计**：100% 明文脚本，内置主机 `nftables` + 代理路由双层封禁出站 `TCP 25`、按内存分档防 OOM 缓冲与 LXC/Docker 容器容错。
 
 ---
 
