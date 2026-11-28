@@ -3,7 +3,6 @@
 [![sing-box](https://img.shields.io/badge/sing--box-v1.14.4-blue)](https://github.com/SagerNet/sing-box/releases)
 [![Zero Panel](https://img.shields.io/badge/Memory-~20MB%20Single%20Binary-green)](#)
 [![CI Check](https://github.com/CatEacc/vps-singbox-runbook/actions/workflows/ci.yml/badge.svg)](https://github.com/CatEacc/vps-singbox-runbook/actions/workflows/ci.yml)
-[![Wiki](https://img.shields.io/badge/Wiki-%E8%AF%A6%E7%BB%86%E6%95%99%E7%A8%8B%E4%B8%8EFAQ-purple)](https://github.com/CatEacc/vps-singbox-runbook/wiki)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Telegram](https://img.shields.io/badge/Telegram-%E7%8C%ABe%2Facc-26A5E4?logo=telegram)](https://t.me/CatCryptoMaster)
 
@@ -22,11 +21,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/CatEacc/vps-singbox-runbook/
 
 ![CatEacc vps-singbox-runbook 终端菜单](https://raw.githubusercontent.com/CatEacc/vps-singbox-runbook/main/singbox_menu.png)
 
-* **方案 1：`VLESS + REALITY + Vision`**（回车默认 `443` 可自选端口，内置 **9 大地区 100% 纯本土 X25519 SNI 自动测速 + 全球 5 站兜底池 + 选后自动实时四重复检**，防套 CF / 防国内 CDN / 防被墙；**支持直接粘贴 `ss://` 链接自动解析，或填后端家宽机 SSH 账密全自动远程部署落地并加白名单完成中转对接**）
-* **方案 2：`Cloudflare CDN 优选`**（`VLESS + WS + TLS`，默认 `2053` 可自选回源端口）
-* **方案 3：`Hysteria 2 + 20000-50000 端口跳跃`**（默认 `UDP 8443` 错开 `TCP 443`，**单进程原生直通后端家宽，无需本地 SOCKS5 桥接、省百兆内存**）
-* **方案 4：`纯系统底层内核调优模式`**（BBR + FQ、按内存分档网络缓冲区、1GB Swap、禁 MPTCP、Fail2ban、Journald 50M 收敛）
-* **只读实用工具**：支持 `[5]` 只读导出全部节点链接与 Hy2 公钥指纹、`[6]` **本机家宽 / 商宽 / 机房 IP 与环境快检**（直查 PTR 反解、官方 RDAP 归属、机房属性、Hyper-V 与出站 `TCP 25` 状态，不碰易误报的流媒体解锁）、`[7]` **REALITY 优选 SNI 测速与域名四重体检**（纯只读测速当前地区本土非 CF 候选池，支持输入任意自定义域名实时验真，亦支持 `bash singbox.sh sni` 直达）
+* **方案 1：`VLESS + REALITY + Vision`**（回车默认 `443` 可自选端口，支持**同端口批量多客户 1-50、自定义命名、已有端口安全追加**；内置 **9 大地区 100% 纯本土 X25519 SNI 自动测速 + 实时四重复检**；支持自建 `SS-2022` 家宽落地及**第三方 SOCKS5 / HTTP 静态住宅代理按 `auth_user` 精准分流**）
+* **方案 2：`Cloudflare CDN 优选`**（`VLESS + WS + TLS`，默认 `2053`，内置 6 选 1 实测优选入口并自动输出免改加速链接与二维码）
+* **方案 3：`Hysteria 2 + 20000-50000 端口跳跃`**（默认 `UDP 8443`，**单进程原生直通后端家宽**，默认 `insecure=0` + `pinSHA256` 证书指纹锁定与 SPKI 公钥防 MITM）
+* **方案 4：`纯系统底层内核调优模式`**（BBR + FQ、按内存分档网络缓冲区、1GB Swap、禁 MPTCP、默认封出站 TCP 25、Fail2ban、Journald 50M 收敛）
+* **只读实用工具**：支持 `[5]` 只读导出全部节点链接、**Clash / Mihomo 单行 YAML** 与 Hy2 公钥指纹、`[6]` **本机家宽 / 商宽 / 机房 IP 与环境快检**、`[7]` **REALITY 优选 SNI 测速与域名四重体检**（亦支持 `bash singbox.sh sni` 直达）
 
 ---
 
