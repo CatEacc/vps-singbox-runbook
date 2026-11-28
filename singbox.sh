@@ -106,6 +106,16 @@ clean_domain() {
     printf "%s" "$1" | sed -E 's#^https?://##; s#/.*$##; s#:[0-9]+$##' | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]'
 }
 
+safe_sed_i() {
+    local expr="$1" f="$2" tmp
+    [ -f "$f" ] || return 0
+    tmp=$(mktemp) || return 0
+    if sed "$expr" "$f" > "$tmp" 2>/dev/null; then
+        cat "$tmp" > "$f" 2>/dev/null || true
+    fi
+    rm -f "$tmp"
+}
+
 MODE="${1:-}"
 SNI_QUERY_ARG="${2:-}"
 if [ -z "$MODE" ]; then
@@ -1008,7 +1018,7 @@ apt-get -o DPkg::Lock::Timeout=60 install -y curl wget tar chrony iptables nftab
 
 echo "[2/4] 配置原子钟对时、1GB Swap、默认封禁出站 TCP 25、Journald 50M 收敛与高并发内核栈..."
 systemctl enable --now chrony 2>/dev/null || true
-chronyc makestep 2>/dev/null || true
+chronyc makestep >/dev/null 2>&1 || true
 timedatectl set-timezone Asia/Shanghai 2>/dev/null || true
 
 if [ ! -f /swapfile ]; then
@@ -1028,7 +1038,7 @@ if swapon --show=NAME --noheadings 2>/dev/null | grep -qx "/swapfile"; then
     grep -q "/swapfile" /etc/fstab || echo "/swapfile none swap sw,nofail 0 0" >> /etc/fstab
     if [ -f /swap.img ] && [ "$(stat -c%s /swap.img 2>/dev/null || echo 1073741824)" -lt 943718400 ]; then
         swapoff /swap.img 2>/dev/null || true
-        sed -i '\|/swap\.img|d' /etc/fstab
+        safe_sed_i '\|/swap\.img|d' /etc/fstab
         rm -f /swap.img
     fi
 fi
@@ -1078,8 +1088,8 @@ journalctl --vacuum-size=40M >/dev/null 2>&1 || true
 systemctl disable --now apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service 2>/dev/null || true
 
 if [ -f /etc/gai.conf ]; then
-    sed -i '/^precedence ::ffff:0:0\/96\s\+100/d' /etc/gai.conf
-    echo "precedence ::ffff:0:0/96  100" >> /etc/gai.conf
+    safe_sed_i '/^precedence ::ffff:0:0\/96\s\+100/d' /etc/gai.conf
+    echo "precedence ::ffff:0:0/96  100" >> /etc/gai.conf 2>/dev/null || true
 fi
 
 mkdir -p /run/sshd
