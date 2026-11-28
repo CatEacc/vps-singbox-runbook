@@ -787,20 +787,24 @@ else:
                     pbk = 'DERIVE_FAILED'
                 link = f"vless://{u}@{uri_ip}:{port}?type=tcp&security=reality&pbk={pbk}&fp=chrome&sni={sni}&sid={sid}&flow=xtls-rprx-vision#{urllib.parse.quote(tag)}"
                 print(f"  [{tag}] {link}")
+                print(f'    [Clash/Mihomo] - {{name: "{tag}", type: vless, server: "{server_ip}", port: {port}, uuid: "{u}", udp: true, tls: true, flow: xtls-rprx-vision, servername: "{sni}", reality-opts: {{public-key: "{pbk}", short-id: "{sid}"}}, client-fingerprint: chrome}}')
                 print_qr(link)
                 found += 1
             elif tls.get('enabled'):
                 host = tls.get('server_name', server_ip)
-                path = urllib.parse.quote(inb.get('transport', {}).get('path', '/vless-ws'), safe='')
+                raw_path = inb.get('transport', {}).get('path', '/vless-ws')
+                path = urllib.parse.quote(raw_path, safe='')
                 link = f"vless://{u}@{host}:{port}?type=ws&security=tls&path={path}&host={host}&sni={host}&alpn=http%2F1.1&fp=chrome#{urllib.parse.quote(tag)}"
                 print(f"  [{tag}] {link}")
+                print(f'    [Clash/Mihomo] - {{name: "{tag}", type: vless, server: "{host}", port: {port}, uuid: "{u}", udp: true, tls: true, servername: "{host}", network: ws, ws-opts: {{path: "{raw_path}", headers: {{Host: "{host}"}}}}, client-fingerprint: chrome}}')
                 print_qr(link)
                 if port in (443, 2053, 2083, 2087, 2096, 8443) and host and host != server_ip:
                     opt_link = link.replace(f"@{host}:{port}?", f"@www.visa.com.hk:{port}?", 1) + "-CF%E4%BC%98%E9%80%89"
                     print(f"  [{tag}-CF优选] {opt_link}")
                 found += 1
         elif t == 'hysteria2':
-            pwd = urllib.parse.quote((inb.get('users') or [{}])[0].get('password', ''), safe='')
+            raw_pwd = (inb.get('users') or [{}])[0].get('password', '')
+            pwd = urllib.parse.quote(raw_pwd, safe='')
             sni_hy = inb.get('tls', {}).get('server_name') or 'www.bing.com'
             cert = inb.get('tls', {}).get('certificate_path', '/etc/sing-box/server.crt')
             fp = spki = ''
@@ -813,8 +817,12 @@ else:
                     spki = base64.b64encode(hashlib.sha256(p2).digest()).decode()
                 except Exception:
                     pass
-            hy_url = f"hysteria2://{pwd}@{uri_ip}:{port}?insecure=1&sni={sni_hy}&pinSHA256={fp}&mport=20000-50000#{urllib.parse.quote(tag)}"
+            insec = '0' if fp else '1'
+            scv = 'false' if fp else 'true'
+            fp_part = f', fingerprint: "{fp}"' if fp else ''
+            hy_url = f"hysteria2://{pwd}@{uri_ip}:{port}?insecure={insec}&sni={sni_hy}&pinSHA256={fp}&mport=20000-50000#{urllib.parse.quote(tag)}"
             print(f"  [{tag}] {hy_url}")
+            print(f'    [Clash/Mihomo] - {{name: "{tag}", type: hysteria2, server: "{server_ip}", port: {port}, password: "{raw_pwd}", ports: "20000-50000", sni: "{sni_hy}"{fp_part}, skip-cert-verify: {scv}}}')
             print_qr(hy_url)
             if spki:
                 print(f"    (client.json certificate_public_key_sha256: {spki})")
@@ -824,6 +832,7 @@ else:
             pwd = inb.get('password', '')
             cred = base64.urlsafe_b64encode(f"{method}:{pwd}".encode()).decode().rstrip('=')
             print(f"  [{tag}] ss://{cred}@{uri_ip}:{port}#{urllib.parse.quote(tag)}")
+            print(f'    [Clash/Mihomo] - {{name: "{tag}", type: ss, server: "{server_ip}", port: {port}, cipher: "{method}", password: "{pwd}", udp: true}}')
             print(f"    (家宽中转参数: IP={server_ip} | PORT={port} | PASS={pwd})")
             found += 1
     if not found:
@@ -1405,6 +1414,8 @@ elif mode == '1':
     for uo in new_users:
         lnk = f"vless://{uo['uuid']}@{uri_ip}:{port}?type=tcp&security=reality&pbk={pub}&fp=chrome&sni={sni}&sid={sid}&flow=xtls-rprx-vision#{urllib.parse.quote(uo['name'])}"
         share_items.append((uo['name'], lnk))
+        safe_nm = uo['name'].replace('"', '\\"')
+        print(f'CLASH_YAML_ITEM={uo["name"]}|- {{name: "{safe_nm}", type: vless, server: "{server_ip}", port: {port}, uuid: "{uo["uuid"]}", udp: true, tls: true, flow: xtls-rprx-vision, servername: "{sni}", reality-opts: {{public-key: "{pub}", short-id: "{sid}"}}, client-fingerprint: chrome}}')
 
 elif mode == '2':
     pre = node_prefix or "SB-CF-WS"
@@ -1441,6 +1452,8 @@ elif mode == '2':
     for uo in new_users:
         lnk = f"vless://{uo['uuid']}@{cf_domain}:{port}?type=ws&security=tls&path=%2Fvless-ws&host={cf_domain}&sni={cf_domain}&alpn=http%2F1.1&fp=chrome#{urllib.parse.quote(uo['name'])}"
         share_items.append((uo['name'], lnk))
+        safe_nm = uo['name'].replace('"', '\\"')
+        print(f'CLASH_YAML_ITEM={uo["name"]}|- {{name: "{safe_nm}", type: vless, server: "{cf_domain}", port: {port}, uuid: "{uo["uuid"]}", udp: true, tls: true, servername: "{cf_domain}", network: ws, ws-opts: {{path: "/vless-ws", headers: {{Host: "{cf_domain}"}}}}, client-fingerprint: chrome}}')
 
 elif mode == '3':
     pre = node_prefix or "SB-Hy2"
@@ -1476,9 +1489,14 @@ elif mode == '3':
             hy2_inb["down_mbps"] = 100
         inbounds.append(hy2_inb)
     print("RESULT_TYPE=LINK")
+    insec = '0' if fp else '1'
+    scv = 'false' if fp else 'true'
+    fp_part = f', fingerprint: "{fp}"' if fp else ''
     for uo in new_users:
-        lnk = f"hysteria2://{uo['password']}@{uri_ip}:{port}?insecure=1&sni=www.bing.com&pinSHA256={fp}&mport=20000-50000#{urllib.parse.quote(uo['name'])}"
+        lnk = f"hysteria2://{uo['password']}@{uri_ip}:{port}?insecure={insec}&sni=www.bing.com&pinSHA256={fp}&mport=20000-50000#{urllib.parse.quote(uo['name'])}"
         share_items.append((uo['name'], lnk))
+        safe_nm = uo['name'].replace('"', '\\"')
+        print(f'CLASH_YAML_ITEM={uo["name"]}|- {{name: "{safe_nm}", type: hysteria2, server: "{server_ip}", port: {port}, password: "{uo["password"]}", ports: "20000-50000", sni: "www.bing.com"{fp_part}, skip-cert-verify: {scv}}}')
     print(f"SPKI_SHA256={spki}")
 
 for _nm, _lnk in share_items:
@@ -1734,6 +1752,13 @@ if [ -f /tmp/sb_result.txt ]; then
             printf "  ${YELLOW}【sing-box client.json 证书锁定 (certificate_public_key_sha256)】：${R}\n"
             grep "^SPKI_SHA256=" /tmp/sb_result.txt | cut -d'=' -f2- | sed 's/^/  /'
         fi
+    fi
+    if grep -q "^CLASH_YAML_ITEM=" /tmp/sb_result.txt; then
+        printf "\n  ${CYAN}【Clash / Mihomo 节点配置（直接复制贴入 proxies，可搭配 vps-clash-runbook 零泄露分流）】：${R}\n"
+        while IFS='|' read -r _scm _scy; do
+            [ -z "$_scy" ] && continue
+            printf "  ${WHITE}%s${R}\n" "$_scy"
+        done < <(grep "^CLASH_YAML_ITEM=" /tmp/sb_result.txt)
     fi
     rm -f /tmp/sb_result.txt
 fi
